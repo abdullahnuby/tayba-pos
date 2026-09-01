@@ -1,0 +1,29 @@
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="طيبة">
+  <!-- Background rounded square with emerald gradient -->
+  <defs>
+    <linearGradient id="taybaGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#047857"/>
+      <stop offset="100%" stop-color="#065F46"/>
+    </linearGradient>
+    <linearGradient id="taybaGold" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F59E0B"/>
+      <stop offset="100%" stop-color="#D97706"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Rounded background -->
+  <rect width="120" height="120" rx="28" fill="url(#taybaGrad)"/>
+
+  <!-- Arabic letter ط stylized as a clothing hanger mark -->
+  <!-- The hanger hook -->
+  <path d="M60 28 C56 28 53 31 53 35 C53 38 55 40 58 41 L58 48" stroke="url(#taybaGold)" stroke-width="3.5" stroke-linecap="round" fill="none"/>
+
+  <!-- The hanger body (curved triangle) -->
+  <path d="M58 48 L38 62 C34 64 36 70 40 68 L60 58 L80 68 C84 70 86 64 82 62 L62 48" stroke="url(#taybaGold)" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+
+  <!-- Subtle dot accent (represents purity/seed) -->
+  <circle cx="60" cy="86" r="4" fill="url(#taybaGold)"/>
+
+  <!-- Minimal base line -->
+  <path d="M44 92 L76 92" stroke="url(#taybaGold)" stroke-width="2" stroke-linecap="round" opacity="0.5"/>
+</svg>
