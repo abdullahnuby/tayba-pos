@@ -821,16 +821,28 @@ function matchWhere(row, where, model) {
       if ('endsWith' in cond && !String(actual??'').toLowerCase().endsWith(String(cond.endsWith).toLowerCase())) return false;
       if ('in' in cond && !cond.in.map(String).includes(String(actual))) return false;
       if ('notIn' in cond && cond.notIn.map(String).includes(String(actual))) return false;
-      if ('gt' in cond && !(Number(actual)>Number(cond.gt))) return false;
-      if ('gte' in cond && !(Number(actual)>=Number(cond.gte))) return false;
-      if ('lt' in cond && !(Number(actual)<Number(cond.lt))) return false;
-      if ('lte' in cond && !(Number(actual)<=Number(cond.lte))) return false;
+      // gt/gte/lt/lte need to work for BOTH plain numbers and date strings (dates are stored
+      // as ISO strings in the sheet). Number("2026-07-15T10:00:00Z") is NaN, so comparisons
+      // on date fields (used constantly for reports, "from/to" filters, etc.) were silently
+      // matching nothing before this fix — every range query returned zero rows.
+      if ('gt' in cond && !(comparableValue(actual)>comparableValue(cond.gt))) return false;
+      if ('gte' in cond && !(comparableValue(actual)>=comparableValue(cond.gte))) return false;
+      if ('lt' in cond && !(comparableValue(actual)<comparableValue(cond.lt))) return false;
+      if ('lte' in cond && !(comparableValue(actual)<=comparableValue(cond.lte))) return false;
       if ('not' in cond && String(actual)===String(cond.not)) return false;
     } else if (Array.isArray(cond)) {
       if (!cond.map(String).includes(String(actual))) return false;
     } else if (String(actual)!==String(cond)) return false;
   }
   return true;
+}
+function comparableValue(v) {
+  if (v === null || v === undefined || v === '') return NaN;
+  if (typeof v === 'number') return v;
+  var n = Number(v);
+  if (!isNaN(n)) return n;
+  var t = Date.parse(v);
+  return t;
 }
 function relationModel(model, field) {
   var map={category:'category',brand:'brand',variants:'productVariant',product:'product',sales:'sale',payments:'customerPayment',saleReturns:'saleReturn',purchases:'purchase',purchaseReturns:'purchaseReturn',supplier:'supplier',items:'purchaseItem',returns:'purchaseReturn',supplierPayments:'supplierPayment',customer:'customer',user:'user',registerSessions:'registerSession',auditLogs:'auditLog',stockAdjustments:'stockAdjustment',saleItems:'saleItem',customerPayments:'customerPayment',saleReturns:'saleReturn',returnItems:'saleReturnItem',sale:'sale',saleReturn:'saleReturn',saleItem:'saleItem',purchase:'purchase',variant:'productVariant',purchaseReturn:'purchaseReturn'};

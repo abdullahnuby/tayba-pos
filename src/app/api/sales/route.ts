@@ -63,14 +63,27 @@ export async function POST(req: NextRequest) {
 
     // Prevent accidental repeated POSTs in the same short window when the browser retries.
     if (data.idempotencyKey) {
-      const recent = await db.sale.findFirst({ where: { userId: user.id, notes: { contains: `[idem:${data.idempotencyKey}]` } }, orderBy: { date: 'desc' } })
+      const recent = await db.sale.findFirst({
+        where: { userId: user.id, notes: { contains: `[idem:${data.idempotencyKey}]` } },
+        orderBy: { date: 'desc' },
+        include: { customer: true, items: { include: { variant: { include: { product: true } } } } },
+      })
       if (recent) return NextResponse.json(recent, { status: 200 })
     }
 
     const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount: data.discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, notes: `${data.notes || ''}${data.idempotencyKey ? ` [idem:${data.idempotencyKey}]` : ''}`.trim() || null, items: data.items } })
+    // atomicAction returns the raw created rows (no relations) — re-fetch with the same
+    // includes used everywhere else (customer, items.variant.product) so the receipt screen
+    // that renders immediately after checkout has the fields it expects instead of crashing
+    // on `item.variant.product.name`.
+    const full = await db.sale.findUnique({
+      where: { id: (result as { id: string }).id },
+      include: { customer: true, items: { include: { variant: { include: { product: true } } } } },
+    })
+    const response = full || result
     await auditLog({ user, action: 'create', entity: 'sale', entityId: (result as any).id, after: { invoiceNo: (result as any).invoiceNo, total: (result as any).total, status: data.status, managerOverride } })
     if (data.status === 'completed') { try { const { syncAfterSale } = await import('@/lib/sync'); await syncAfterSale(data.customerId) } catch {} }
-    return NextResponse.json(result, { status: 201 })
+    return NextResponse.json(response, { status: 201 })
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string }
     if (err.code === 'P2002') return NextResponse.json({ error: 'تعارض في رقم الفاتورة — حاول مرة أخرى' }, { status: 409 })
