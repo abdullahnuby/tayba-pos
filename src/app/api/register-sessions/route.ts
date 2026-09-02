@@ -8,9 +8,10 @@ const pinField = z.string().regex(/^[0-9]{2,6}$/, 'الرقم السري غير 
 const openSchema = z.object({ openingFloat: z.number().min(0), pin: pinField, notes: z.string().optional().nullable() })
 const closeSchema = z.object({ sessionId: z.string().min(1), closingFloat: z.number().min(0), pin: pinField, notes: z.string().optional().nullable() })
 
-async function verifyUserPassword(userId: string, password: string) {
-  const row = await db.user.findUnique({ where: { id: userId }, select: { passwordHash: true } })
-  return !!row && verifyPassword(password, row.passwordHash)
+async function verifyUserPin(userId: string, pin: string): Promise<'ok' | 'no-pin' | 'wrong'> {
+  const row = await db.user.findUnique({ where: { id: userId }, select: { pinHash: true } })
+  if (!row?.pinHash) return 'no-pin'
+  return verifyPin(pin, row.pinHash) ? 'ok' : 'wrong'
 }
 
 export async function GET() {
@@ -27,7 +28,9 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
     const parsed = openSchema.safeParse(await req.json())
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
-    if (!(await verifyUserPassword(user.id, parsed.data.password))) return NextResponse.json({ error: 'كلمة المرور غير صحيحة' }, { status: 403 })
+    const pinCheck = await verifyUserPin(user.id, parsed.data.pin)
+    if (pinCheck === 'no-pin') return NextResponse.json({ error: 'لم يتم تحديد رقم سري لك بعد — راجع الإدارة' }, { status: 403 })
+    if (pinCheck === 'wrong') return NextResponse.json({ error: 'الرقم السري غير صحيح' }, { status: 403 })
     const existing = await db.registerSession.findFirst({ where: { userId: user.id, status: 'open' } })
     if (existing) return NextResponse.json({ error: 'لديك وردية مفتوحة بالفعل' }, { status: 409 })
     const session = await db.registerSession.create({ data: { userId: user.id, openingFloat: parsed.data.openingFloat, notes: parsed.data.notes || null, status: 'open' } })
@@ -42,7 +45,9 @@ export async function PATCH(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
     const parsed = closeSchema.safeParse(await req.json())
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
-    if (!(await verifyUserPassword(user.id, parsed.data.password))) return NextResponse.json({ error: 'كلمة المرور غير صحيحة' }, { status: 403 })
+    const pinCheck2 = await verifyUserPin(user.id, parsed.data.pin)
+    if (pinCheck2 === 'no-pin') return NextResponse.json({ error: 'لم يتم تحديد رقم سري لك بعد — راجع الإدارة' }, { status: 403 })
+    if (pinCheck2 === 'wrong') return NextResponse.json({ error: 'الرقم السري غير صحيح' }, { status: 403 })
 
     const session = await db.registerSession.findUnique({ where: { id: parsed.data.sessionId } })
     if (!session) return NextResponse.json({ error: 'الوردية غير موجودة' }, { status: 404 })
