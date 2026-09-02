@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { requireUser, hashPassword, validatePasswordPolicy, flagMustChangePassword } from '@/lib/auth'
+import { requireUser, hashPassword, validatePasswordPolicy, flagMustChangePassword, hashPin, validatePinPolicy } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 
 export async function GET() {
   try {
     await requireUser(['admin'])
     const users = await db.user.findMany({
-      select: { id: true, username: true, name: true, role: true, active: true, createdAt: true },
+      select: { id: true, username: true, name: true, role: true, active: true, createdAt: true, pinHash: true },
       orderBy: { createdAt: 'asc' },
     })
-    return NextResponse.json(users)
+    return NextResponse.json(users.map(u => ({ ...u, pinHash: undefined, hasPin: !!u.pinHash })))
   } catch (e) {
     if (e instanceof Response) return e
     return NextResponse.json({ error: 'خطأ' }, { status: 500 })
@@ -20,7 +20,7 @@ export async function GET() {
 export async function POST(req: NextRequest) {
   try {
     const me = await requireUser(['admin'])
-    const { username, password, name, role } = await req.json()
+    const { username, password, name, role, pin } = await req.json()
     if (!username || !password || !name) {
       return NextResponse.json({ error: 'الحقول مطلوبة' }, { status: 400 })
     }
@@ -28,6 +28,14 @@ export async function POST(req: NextRequest) {
     const policy = validatePasswordPolicy(password)
     if (!policy.ok) {
       return NextResponse.json({ error: policy.error }, { status: 400 })
+    }
+    let pinHash: string | undefined
+    if (typeof pin === 'string' && pin.length > 0) {
+      const pinPolicy = validatePinPolicy(pin)
+      if (!pinPolicy.ok) {
+        return NextResponse.json({ error: pinPolicy.error }, { status: 400 })
+      }
+      pinHash = hashPin(pin)
     }
     const existing = await db.user.findUnique({ where: { username } })
     if (existing) {
@@ -40,6 +48,7 @@ export async function POST(req: NextRequest) {
       data: {
         username,
         passwordHash: hashPassword(password),
+        pinHash,
         name,
         role: role || 'cashier',
       },
