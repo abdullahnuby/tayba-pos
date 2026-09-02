@@ -1,25 +1,91 @@
 import { PrismaClient } from '@prisma/client'
+import { PrismaD1 } from '@prisma/adapter-d1'
 
-const globalForPrisma = globalThis as unknown as {
-  prisma?: PrismaClient
+/**
+ * Cloudflare Workers has no persistent filesystem, so a plain
+ * `file:./db/tayba.db` SQLite datasource can never work there —
+ * and the native Prisma query engine binary cannot run in the
+ * Workers V8 isolate at all, regardless of `binaryTargets`.
+ *
+ * On Cloudflare we use D1 (Cloudflare's own SQLite-compatible
+ * edge database) through Prisma's driver adapter, which talks to
+ * D1 over the Workers binding instead of a native engine binary.
+ *
+ * Locally (vinext dev / next dev / tests), there is no D1 binding,
+ * so we fall back to the traditional file-based SQLite engine —
+ * that path still needs the query engine binary, which is why we
+ * keep `binaryTargets` in schema.prisma for local/dev builds.
+ *
+ * We intentionally avoid a *static* `import ... from 'cloudflare:workers'`
+ * here: Vinext/Rolldown tries to resolve that module at build time
+ * and fails outside an actual Workers build. Using `new Function(...)`
+ * hides the specifier from static analysis (same trick already used
+ * in `src/lib/sheets-source.ts`), so it only gets evaluated at runtime
+ * inside an actual Worker.
+ */
+
+type D1Database = ConstructorParameters<typeof PrismaD1>[0]
+
+type CloudflareEnv = {
+  DB?: D1Database
 }
 
-const databaseUrl =
-  process.env.DATABASE_URL || 'file:./db/tayba.db'
+async function getD1Binding(): Promise<D1Database | undefined> {
+  try {
+    const dynamicImport = new Function(
+      'specifier',
+      'return import(specifier)'
+    ) as (specifier: string) => Promise<{ env?: CloudflareEnv }>
 
-export const db: any =
-  globalForPrisma.prisma ??
-  new PrismaClient({
+    const runtime = await dynamicImport('cloudflare:workers')
+    return runtime.env?.DB
+  } catch {
+    // Not running inside a Cloudflare Worker (local dev, tests, etc).
+    return undefined
+  }
+}
+
+const logLevels =
+  process.env.NODE_ENV === 'development'
+    ? (['warn', 'error'] as const)
+    : (['error'] as const)
+
+async function createPrismaClient(): Promise<PrismaClient> {
+  const d1 = await getD1Binding()
+
+  if (d1) {
+    const adapter = new PrismaD1(d1)
+    return new PrismaClient({ adapter, log: [...logLevels] })
+  }
+
+  // Local/dev fallback only — never reachable on Cloudflare Workers.
+  const databaseUrl =
+    process.env.DATABASE_URL || 'file:./db/tayba.db'
+
+  return new PrismaClient({
     datasources: {
       db: {
         url: databaseUrl,
       },
     },
-    log:
-      process.env.NODE_ENV === 'development'
-        ? ['warn', 'error']
-        : ['error'],
+    log: [...logLevels],
   })
+}
+
+const globalForPrisma = globalThis as unknown as {
+  prisma?: PrismaClient
+  prismaInitPromise?: Promise<PrismaClient>
+}
+
+// Top-level await: resolves once per Worker isolate. The D1 binding
+// (like KV/env vars) is available at module-evaluation time in the
+// Workers ES module runtime, not just inside a request handler.
+const prismaInstance: PrismaClient =
+  globalForPrisma.prisma ??
+  (await (globalForPrisma.prismaInitPromise ??=
+    createPrismaClient()))
+
+export const db: any = prismaInstance
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = db

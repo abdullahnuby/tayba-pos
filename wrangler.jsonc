@@ -21,6 +21,13 @@
       "id": "2f1b568540fe4ec0bcc273e4d3019ec7"
     }
   ],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "tayba-db",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID"
+    }
+  ],
   "vars": {
     "SHEETS_CACHE_TTL_SECONDS": "60"
   }
