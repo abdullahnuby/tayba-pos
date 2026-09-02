@@ -80,61 +80,70 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
-    const updated = await db.$transaction(async (tx) => {
-      if (variants) {
-        // Reconcile in place — update existing variants by id (preserving their id and
-        // any FK references from sales/purchases/stock-adjustments), create only genuinely
-        // new rows, and delete only rows the user actually removed from the form.
-        // (Previously this deleted ALL variants and recreated them, which silently issued
-        // new ids and orphaned every historical sale/purchase/adjustment line for this product.)
-        const existing = await tx.productVariant.findMany({
-          where: { productId: id },
-          select: { id: true },
-        })
-        const existingIds = new Set<string>(existing.map((v: { id: string }) => v.id))
-        const incomingIds = new Set(variants.filter((v) => v.id).map((v) => v.id as string))
-        const toDelete = [...existingIds].filter((vid) => !incomingIds.has(vid))
-        if (toDelete.length) {
-          await tx.productVariant.deleteMany({ where: { id: { in: toDelete } } })
+    // Cloudflare D1 doesn't support interactive transactions (a callback that
+    // awaits reads/writes one by one). So: do the read up front (outside the
+    // transaction), build the full list of write operations, then run them all
+    // together as one D1-compatible BATCH transaction (db.$transaction([...])).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const ops: any[] = []
+
+    if (variants) {
+      // Reconcile in place — update existing variants by id (preserving their id and
+      // any FK references from sales/purchases/stock-adjustments), create only genuinely
+      // new rows, and delete only rows the user actually removed from the form.
+      // (Previously this deleted ALL variants and recreated them, which silently issued
+      // new ids and orphaned every historical sale/purchase/adjustment line for this product.)
+      const existing = await db.productVariant.findMany({
+        where: { productId: id },
+        select: { id: true },
+      })
+      const existingIds = new Set<string>(existing.map((v: { id: string }) => v.id))
+      const incomingIds = new Set(variants.filter((v) => v.id).map((v) => v.id as string))
+      const toDelete = [...existingIds].filter((vid) => !incomingIds.has(vid))
+      if (toDelete.length) {
+        ops.push(db.productVariant.deleteMany({ where: { id: { in: toDelete } } }))
+      }
+      for (const v of variants) {
+        const data = {
+          sku: v.sku,
+          barcode: v.barcode || null,
+          size: v.size || null,
+          color: v.color || null,
+          material: v.material || null,
+          costPrice: v.costPrice,
+          sellPrice: v.sellPrice,
+          minQuantity: v.minQuantity,
+          reorderQty: v.reorderQty,
+          baseUnit: v.baseUnit,
+          purchaseUnit: v.purchaseUnit,
+          purchaseUnitFactor: v.purchaseUnitFactor,
+          saleUnit: v.saleUnit,
+          saleUnitFactor: v.saleUnitFactor,
+          quarterDozenPrice: v.quarterDozenPrice || null,
+          halfDozenPrice: v.halfDozenPrice || null,
+          dozenPrice: v.dozenPrice || null,
         }
-        for (const v of variants) {
-          const data = {
-            sku: v.sku,
-            barcode: v.barcode || null,
-            size: v.size || null,
-            color: v.color || null,
-            material: v.material || null,
-            costPrice: v.costPrice,
-            sellPrice: v.sellPrice,
-            minQuantity: v.minQuantity,
-            reorderQty: v.reorderQty,
-            baseUnit: v.baseUnit,
-            purchaseUnit: v.purchaseUnit,
-            purchaseUnitFactor: v.purchaseUnitFactor,
-            saleUnit: v.saleUnit,
-            saleUnitFactor: v.saleUnitFactor,
-            quarterDozenPrice: v.quarterDozenPrice || null,
-            halfDozenPrice: v.halfDozenPrice || null,
-            dozenPrice: v.dozenPrice || null,
-          }
-          if (v.id && existingIds.has(v.id)) {
-            // Existing variant: update in place, keep its id. Quantity is deliberately
-            // NOT overwritten here — live stock is changed only via sales/purchases/
-            // stock-adjustments, never by re-saving the product form.
-            await tx.productVariant.update({ where: { id: v.id }, data })
-          } else {
-            // New variant: create fresh, seeded with the quantity entered in the form.
-            await tx.productVariant.create({ data: { ...data, productId: id, quantity: v.quantity } })
-          }
+        if (v.id && existingIds.has(v.id)) {
+          // Existing variant: update in place, keep its id. Quantity is deliberately
+          // NOT overwritten here — live stock is changed only via sales/purchases/
+          // stock-adjustments, never by re-saving the product form.
+          ops.push(db.productVariant.update({ where: { id: v.id }, data }))
+        } else {
+          // New variant: create fresh, seeded with the quantity entered in the form.
+          ops.push(db.productVariant.create({ data: { ...data, productId: id, quantity: v.quantity } }))
         }
       }
-      // Clean nulls
-      const cleanUpdate: Record<string, unknown> = {}
-      for (const [k, v] of Object.entries(updateData)) {
-        cleanUpdate[k] = v === null ? null : v
-      }
-      return tx.product.update({ where: { id }, data: cleanUpdate, include: { variants: true, category: true, brand: true } })
-    })
+    }
+    // Clean nulls
+    const cleanUpdate: Record<string, unknown> = {}
+    for (const [k, v] of Object.entries(updateData)) {
+      cleanUpdate[k] = v === null ? null : v
+    }
+    ops.push(db.product.update({ where: { id }, data: cleanUpdate, include: { variants: true, category: true, brand: true } }))
+
+    const results = await db.$transaction(ops)
+    // The product.update was pushed last, so its result is the last element.
+    const updated = results[results.length - 1]
 
     // Auto-sync to Google Sheets (best-effort)
     try {
