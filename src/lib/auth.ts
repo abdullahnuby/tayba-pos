@@ -148,10 +148,28 @@ export function verifyPassword(
 // -----------------------------------------------------
 // A short numeric PIN each cashier sets for themselves, used only to
 // open/close their register shift — separate from their login password.
-// Hashed with the same PBKDF2 scheme as the password.
+// Self-contained (does not depend on hashPassword/verifyPassword names).
 
-export const hashPin = hashPassword
-export const verifyPin = verifyPassword
+export function hashPin(pin: string): string {
+  const salt = crypto.randomBytes(16).toString('hex')
+  const hash = crypto.pbkdf2Sync(pin, salt, 1000, 64, 'sha512').toString('hex')
+  return `${salt}:${hash}`
+}
+
+export function verifyPin(pin: string, stored: string): boolean {
+  if (!pin || !stored) return false
+  const [salt, hash] = stored.split(':')
+  if (!salt || !hash) return false
+  try {
+    const verify = crypto.pbkdf2Sync(pin, salt, 1000, 64, 'sha512').toString('hex')
+    const storedBuffer = Buffer.from(hash, 'hex')
+    const verifyBuffer = Buffer.from(verify, 'hex')
+    if (storedBuffer.length !== verifyBuffer.length) return false
+    return crypto.timingSafeEqual(storedBuffer, verifyBuffer)
+  } catch {
+    return false
+  }
+}
 
 /**
  * PIN policy: 2 to 6 digits, numeric only.
