@@ -57,8 +57,10 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const payment = await retryOnConflict(() => db.$transaction(async (tx) => {
-      const created = await tx.supplierPayment.create({
+    // Cloudflare D1 doesn't support interactive transactions — build the
+    // operations up front and run them together as one batch transaction.
+    const ops = [
+      db.supplierPayment.create({
         data: {
           supplierId: data.supplierId,
           purchaseId: data.purchaseId || null,
@@ -66,19 +68,24 @@ export async function POST(req: NextRequest) {
           method: data.method,
           notes: data.notes,
         },
-      })
-      await tx.supplier.update({
+      }),
+      db.supplier.update({
         where: { id: data.supplierId },
         data: { balance: { decrement: data.amount } },
-      })
-      if (data.purchaseId) {
-        await tx.purchase.update({
-          where: { id: data.purchaseId },
-          data: { paid: { increment: data.amount } },
-        })
-      }
+      }),
+      ...(data.purchaseId
+        ? [
+            db.purchase.update({
+              where: { id: data.purchaseId },
+              data: { paid: { increment: data.amount } },
+            }),
+          ]
+        : []),
+    ]
+    const payment = await retryOnConflict(async () => {
+      const [created] = await db.$transaction(ops)
       return created
-    }, { timeout: 30_000, maxWait: 15_000, isolationLevel: 'Serializable' }))
+    })
 
     await auditLog({ user, action: 'payment', entity: 'supplier', entityId: data.supplierId, after: { amount: data.amount } })
 
