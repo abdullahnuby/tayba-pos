@@ -10,7 +10,7 @@ const closeSchema = z.object({ sessionId: z.string().min(1), closingFloat: z.num
 
 async function verifyUserPin(userId: string, pin: string): Promise<'ok' | 'no-pin' | 'wrong'> {
   const row = await db.user.findUnique({ where: { id: userId }, select: { pinHash: true } })
-  if (!row?.pinHash) return 'no-pin'
+  if (!row?.pinHash) return 'no-pin' // no PIN set yet — admin must set one first
   return verifyPin(pin, row.pinHash) ? 'ok' : 'wrong'
 }
 
@@ -19,7 +19,26 @@ export async function GET() {
   if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
   const where = user.role === 'cashier' ? { userId: user.id } : {}
   const sessions = await db.registerSession.findMany({ where, include: { user: { select: { name: true, username: true } } }, orderBy: { openedAt: 'desc' }, take: user.role === 'cashier' ? 20 : 100 })
-  return NextResponse.json({ items: sessions })
+
+  // Closed sessions already have their final numbers stored — only open
+  // sessions need a live (right-now) total, computed the same way the
+  // close-shift report computes it, so the card on screen isn't stuck at 0.
+  const now = new Date()
+  const items = await Promise.all(
+    sessions.map(async (s) => {
+      if (s.status !== 'open') return s
+      const sales = await db.sale.findMany({
+        where: { date: { gte: s.openedAt, lte: now }, status: 'completed', userId: s.userId },
+        select: { total: true, paymentMethod: true },
+      })
+      const cashSales = sales.filter((x) => x.paymentMethod === 'cash').reduce((sum, x) => sum + x.total, 0)
+      const cardSales = sales.filter((x) => x.paymentMethod === 'card').reduce((sum, x) => sum + x.total, 0)
+      const transferSales = sales.filter((x) => x.paymentMethod === 'transfer').reduce((sum, x) => sum + x.total, 0)
+      return { ...s, cashSales, cardSales, transferSales }
+    })
+  )
+
+  return NextResponse.json({ items })
 }
 
 export async function POST(req: NextRequest) {
