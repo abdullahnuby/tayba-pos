@@ -1,418 +1,112 @@
-// ============================================================
-//  Clothing Store Management — Comprehensive Prisma Schema
-//  Phase 1+2+3 rebuild: variants, returns, payments, audit,
-//  register sessions, stock adjustments, auth, VAT, audit log.
-// ============================================================
-
-generator client {
-  provider        = "prisma-client-js"
-  engineType      = "client"
-  previewFeatures = ["driverAdapters"]
-}
-
-datasource db {
-  provider = "sqlite"
-  url      = "file:./db/tayba.db"
-}
-
-// ------------------------------------------------------------
-// Authentication & Authorization
-// ------------------------------------------------------------
-model User {
-  id           String   @id @default(cuid())
-  username     String   @unique
-  passwordHash String
-  name         String
-  role         String   @default("cashier") // 'admin' | 'manager' | 'cashier'
-  active       Boolean  @default(true)
-  createdAt    DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  registerSessions RegisterSession[]
-  auditLogs        AuditLog[]
-  stockAdjustments StockAdjustment[]
-  sales            Sale[]
-}
-
-// ------------------------------------------------------------
-// Catalog: Category → Product (parent) → Variant (size × color)
-// ------------------------------------------------------------
-model Category {
-  id        String    @id @default(cuid())
-  name      String    @unique
-  createdAt DateTime  @default(now())
-  products  Product[]
-}
-
-model Brand {
-  id      String   @id @default(cuid())
-  name    String   @unique
-  products Product[]
-}
-
-model Product {
-  id          String          @id @default(cuid())
-  name        String
-  description String?
-  categoryId  String
-  category    Category        @relation(fields: [categoryId], references: [id])
-  brandId     String?
-  brand       Brand?          @relation(fields: [brandId], references: [id])
-  gender      String?         // 'male' | 'female' | 'unisex' | 'kids'
-  season      String?         // 'summer' | 'winter' | 'spring' | 'autumn' | 'all'
-  material    String?
-  image       String?
-  createdAt   DateTime        @default(now())
-  updatedAt   DateTime        @updatedAt
-
-  variants          ProductVariant[]
-
-  @@index([categoryId])
-  @@index([brandId])
-  @@index([name])
-}
-
-model ProductVariant {
-  id          String   @id @default(cuid())
-  productId   String
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sku         String   @unique
-  barcode     String?  @unique
-  size        String?
-  color       String?
-  material    String?
-  costPrice   Float    @default(0) // moving weighted average cost
-  sellPrice   Float    @default(0)
-  quantity    Int      @default(0)
-  minQuantity Int      @default(5)
-  reorderQty  Int      @default(10)
-  baseUnit    String   @default("piece")
-  purchaseUnit String  @default("piece")
-  purchaseUnitFactor Int @default(1)
-  saleUnit    String   @default("piece")
-  saleUnitFactor Int   @default(1)
-  quarterDozenPrice Float?
-  halfDozenPrice Float?
-  dozenPrice     Float?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-
-  purchaseItems      PurchaseItem[]
-  saleItems          SaleItem[]
-  saleReturnItems    SaleReturnItem[]
-  purchaseReturnItems PurchaseReturnItem[]
-  stockAdjustments   StockAdjustment[]
-
-  @@index([productId])
-  @@index([quantity, minQuantity]) // low stock alert query
-}
-
-// ------------------------------------------------------------
-// Suppliers & Customers — with balances
-// ------------------------------------------------------------
-model Supplier {
-  id        String   @id @default(cuid())
-  name      String
-  phone     String?
-  address   String?
-  notes     String?
-  balance   Float    @default(0) // positive = we owe them
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  purchases        Purchase[]
-  payments         SupplierPayment[]
-  purchaseReturns  PurchaseReturn[]
-}
-
-model Customer {
-  id        String   @id @default(cuid())
-  name      String
-  phone     String?
-  address   String?
-  notes     String?
-  balance   Float    @default(0) // positive = they owe us
-  loyaltyPoints Int @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-
-  sales           Sale[]
-  payments        CustomerPayment[]
-  saleReturns     SaleReturn[]
-}
-
-// ------------------------------------------------------------
-// Purchases — invoice + line items
-// ------------------------------------------------------------
-model Purchase {
-  id         String   @id @default(cuid())
-  invoiceNo  String   @unique
-  supplierId String
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
-  date       DateTime @default(now())
-  subtotal   Float    @default(0)
-  discount   Float    @default(0)
-  taxRate    Float    @default(0)
-  taxAmount  Float    @default(0)
-  total      Float    @default(0)
-  paid       Float    @default(0)
-  status     String   @default("completed") // 'draft' | 'completed' | 'voided'
-  notes      String?
-  createdAt  DateTime @default(now())
-
-  items         PurchaseItem[]
-  returns       PurchaseReturn[]
-  supplierPayments SupplierPayment[]
-
-  @@index([supplierId, date])
-  @@index([date, status])
-  @@index([status])
-}
-
-model PurchaseItem {
-  id         String         @id @default(cuid())
-  purchaseId String
-  purchase   Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
-  variantId  String
-  variant    ProductVariant  @relation(fields: [variantId], references: [id])
-  quantity   Int
-  unitCost   Float
-  total      Float
-  enteredQuantity Float?
-  unit       String?
-  unitFactor Int?
-
-  @@index([purchaseId])
-  @@index([variantId])
-}
-
-model PurchaseReturn {
-  id         String   @id @default(cuid())
-  returnNo   String   @unique
-  purchaseId String
-  purchase   Purchase @relation(fields: [purchaseId], references: [id])
-  supplierId String
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
-  date       DateTime @default(now())
-  total      Float    @default(0)
-  reason     String?
-  notes      String?
-  status     String   @default("completed")
-  createdAt  DateTime @default(now())
-
-  items      PurchaseReturnItem[]
-  supplierPayments SupplierPayment[]
-}
-
-model PurchaseReturnItem {
-  id              String            @id @default(cuid())
-  purchaseReturnId String
-  purchaseReturn  PurchaseReturn    @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
-  variantId       String
-  variant         ProductVariant    @relation(fields: [variantId], references: [id])
-  quantity        Int
-  unitCost        Float
-  total           Float
-}
-
-// ------------------------------------------------------------
-// Sales — invoice + line items (with snapshot cost)
-// ------------------------------------------------------------
-model Sale {
-  id            String     @id @default(cuid())
-  invoiceNo     String     @unique
-  customerId    String?
-  customer      Customer?  @relation(fields: [customerId], references: [id])
-  userId        String?
-  user          User?      @relation(fields: [userId], references: [id])
-  date          DateTime   @default(now())
-  subtotal      Float      @default(0)
-  discount      Float      @default(0)
-  taxRate       Float      @default(0)
-  taxAmount     Float      @default(0)
-  total         Float      @default(0)
-  paid          Float      @default(0)
-  change        Float      @default(0)
-  paymentMethod String     @default("cash")
-  status        String     @default("completed") // 'draft' (held) | 'completed' | 'voided' | 'returned' | 'partial_return'
-  voidReason    String?
-  notes         String?
-  createdAt     DateTime   @default(now())
-
-  items         SaleItem[]
-  returns       SaleReturn[]
-  customerPayments CustomerPayment[]
-
-  @@index([date, status])
-  @@index([customerId, date])
-  @@index([userId, date])
-  @@index([status])
-  @@index([paymentMethod, date])
-}
-
-model SaleItem {
-  id         String        @id @default(cuid())
-  saleId     String
-  sale       Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
-  variantId  String
-  variant    ProductVariant @relation(fields: [variantId], references: [id])
-  quantity   Int
-  unitPrice  Float
-  unitCost   Float    // SNAPSHOT cost at sale time (for accurate historical profit)
-  total      Float
-  returnItems SaleReturnItem[]
-
-  @@index([saleId])
-  @@index([variantId])
-}
-
-model SaleReturn {
-  id         String   @id @default(cuid())
-  returnNo   String   @unique
-  saleId     String
-  sale       Sale     @relation(fields: [saleId], references: [id])
-  customerId String?
-  customer   Customer? @relation(fields: [customerId], references: [id])
-  date       DateTime @default(now())
-  subtotal   Float    @default(0)
-  total      Float    @default(0)
-  reason     String?
-  notes      String?
-  status     String   @default("completed") // 'draft' | 'completed' | 'voided'
-  createdAt  DateTime @default(now())
-
-  items      SaleReturnItem[]
-  customerPayments CustomerPayment[]
-
-  @@index([saleId])
-  @@index([customerId, date])
-  @@index([date, status])
-}
-
-model SaleReturnItem {
-  id        String         @id @default(cuid())
-  saleReturnId String
-  saleReturn SaleReturn    @relation(fields: [saleReturnId], references: [id], onDelete: Cascade)
-  saleItemId String
-  saleItem  SaleItem       @relation(fields: [saleItemId], references: [id])
-  variantId String
-  variant   ProductVariant  @relation(fields: [variantId], references: [id])
-  quantity  Int
-  unitPrice Float
-  total     Float
-}
-
-// ------------------------------------------------------------
-// Payments (customer & supplier)
-// ------------------------------------------------------------
-model CustomerPayment {
-  id         String   @id @default(cuid())
-  customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
-  saleId     String?
-  sale       Sale?    @relation(fields: [saleId], references: [id])
-  saleReturnId String?
-  saleReturn SaleReturn? @relation(fields: [saleReturnId], references: [id])
-  amount     Float
-  method     String   @default("cash") // 'cash' | 'card' | 'transfer'
-  date       DateTime @default(now())
-  notes      String?
-  createdAt  DateTime @default(now())
-
-  @@index([customerId, date])
-  @@index([saleId])
-  @@index([date, method])
-}
-
-model SupplierPayment {
-  id         String   @id @default(cuid())
-  supplierId String
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
-  purchaseId String?
-  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
-  purchaseReturnId String?
-  purchaseReturn PurchaseReturn? @relation(fields: [purchaseReturnId], references: [id])
-  amount     Float
-  method     String   @default("cash")
-  date       DateTime @default(now())
-  notes      String?
-  createdAt  DateTime @default(now())
-
-  @@index([supplierId, date])
-  @@index([purchaseId])
-  @@index([date, method])
-}
-
-// ------------------------------------------------------------
-// Register sessions (cash drawer shifts)
-// ------------------------------------------------------------
-model RegisterSession {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  openedAt        DateTime @default(now())
-  closedAt        DateTime?
-  openingFloat    Float    @default(0)
-  closingFloat    Float?
-  expectedCash    Float?
-  difference      Float?
-  cashSales       Float    @default(0)
-  cardSales       Float    @default(0)
-  transferSales   Float    @default(0)
-  notes           String?
-  status          String   @default("open") // 'open' | 'closed'
-
-  @@index([userId, status])
-  @@index([status, openedAt])
-}
-
-// ------------------------------------------------------------
-// Stock Adjustments (damage, theft, stocktake, sample, transfer)
-// ------------------------------------------------------------
-model StockAdjustment {
-  id         String          @id @default(cuid())
-  variantId  String
-  variant    ProductVariant  @relation(fields: [variantId], references: [id])
-  productId  String?
-  userId     String?
-  user       User?           @relation(fields: [userId], references: [id])
-  type        String          // 'damage' | 'theft' | 'stocktake' | 'sample' | 'transfer_in' | 'transfer_out' | 'adjustment'
-  quantityChange Int         // negative or positive
-  reason      String?
-  notes       String?
-  createdAt   DateTime        @default(now())
-
-  @@index([variantId, createdAt])
-  @@index([userId, createdAt])
-  @@index([type, createdAt])
-}
-
-// ------------------------------------------------------------
-// Audit Log
-// ------------------------------------------------------------
-model AuditLog {
-  id        String   @id @default(cuid())
-  userId    String?
-  user      User?    @relation(fields: [userId], references: [id])
-  action    String   // 'create' | 'update' | 'delete' | 'void' | 'return' | 'payment'
-  entity    String   // 'sale' | 'purchase' | 'product' | 'customer' ...
-  entityId  String?
-  before    String?  // JSON
-  after     String?  // JSON
-  ip        String?
-  createdAt DateTime @default(now())
-
-  @@index([userId, createdAt])
-  @@index([entity, entityId])
-  @@index([action, createdAt])
-  @@index([createdAt])
-}
-
-// ------------------------------------------------------------
-// App Settings (key-value)
-// ------------------------------------------------------------
-model Setting {
-  id    String @id @default(cuid())
-  key   String @unique
-  value String
+{
+  "name": "tayba-pos",
+  "version": "3.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "prisma generate && vinext build",
+    "start": "next start",
+    "lint": "eslint .",
+    "db:push": "prisma db push",
+    "db:generate": "prisma generate",
+    "db:migrate": "prisma migrate dev",
+    "db:reset": "prisma migrate reset",
+    "dev:vinext": "vinext dev",
+    "build:vinext": "vinext build",
+    "deploy": "npx @vinext/cloudflare deploy --config dist/server/wrangler.json",
+    "cf:check": "vinext check",
+    "cf:typegen": "wrangler types",
+    "cf:init": "vinext init --platform=cloudflare --data-cache=kv",
+    "cf:deploy": "npx @vinext/cloudflare deploy --config dist/server/wrangler.json --skip-build"
+  },
+  "dependencies": {
+    "@dnd-kit/core": "^6.3.1",
+    "@dnd-kit/sortable": "^10.0.0",
+    "@dnd-kit/utilities": "^3.2.2",
+    "@hookform/resolvers": "^5.1.1",
+    "@mdxeditor/editor": "^3.39.1",
+    "@prisma/adapter-d1": "6.19.3",
+    "@prisma/client": "6.19.3",
+    "@radix-ui/react-accordion": "^1.2.11",
+    "@radix-ui/react-alert-dialog": "^1.1.14",
+    "@radix-ui/react-aspect-ratio": "^1.1.7",
+    "@radix-ui/react-avatar": "^1.1.10",
+    "@radix-ui/react-checkbox": "^1.3.2",
+    "@radix-ui/react-collapsible": "^1.2.11",
+    "@radix-ui/react-context-menu": "^2.2.15",
+    "@radix-ui/react-dialog": "^1.1.15",
+    "@radix-ui/react-dropdown-menu": "^2.1.15",
+    "@radix-ui/react-hover-card": "^1.1.15",
+    "@radix-ui/react-label": "^2.1.7",
+    "@radix-ui/react-menubar": "^1.1.15",
+    "@radix-ui/react-navigation-menu": "^1.2.13",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-progress": "^1.1.7",
+    "@radix-ui/react-radio-group": "^1.3.7",
+    "@radix-ui/react-scroll-area": "^1.2.9",
+    "@radix-ui/react-select": "^2.2.5",
+    "@radix-ui/react-separator": "^1.1.7",
+    "@radix-ui/react-slider": "^1.3.5",
+    "@radix-ui/react-slot": "^1.2.3",
+    "@radix-ui/react-switch": "^1.2.5",
+    "@radix-ui/react-tabs": "^1.1.12",
+    "@radix-ui/react-toast": "^1.2.14",
+    "@radix-ui/react-toggle": "^1.1.9",
+    "@radix-ui/react-toggle-group": "^1.1.10",
+    "@radix-ui/react-tooltip": "^1.2.7",
+    "@reactuses/core": "^6.0.5",
+    "@tanstack/react-query": "^5.82.0",
+    "@tanstack/react-table": "^8.21.0",
+    "@vinext/cloudflare": "1.0.0-beta.6",
+    "class-variance-authority": "^0.7.1",
+    "clsx": "^2.1.1",
+    "cmdk": "^1.1.1",
+    "date-fns": "^4.1.0",
+    "embla-carousel-react": "^8.6.0",
+    "framer-motion": "^12.23.2",
+    "input-otp": "^1.4.2",
+    "lucide-react": "^0.525.0",
+    "next": "^16.1.1",
+    "next-auth": "^4.24.11",
+    "next-intl": "^4.3.4",
+    "next-themes": "^0.4.6",
+    "react": "^19.0.0",
+    "react-day-picker": "^9.8.0",
+    "react-dom": "^19.0.0",
+    "react-hook-form": "^7.60.0",
+    "react-markdown": "^10.1.0",
+    "react-resizable-panels": "^3.0.3",
+    "react-server-dom-webpack": "^19.2.8",
+    "react-syntax-highlighter": "^15.6.1",
+    "recharts": "^2.15.4",
+    "sharp": "^0.34.3",
+    "sonner": "^2.0.6",
+    "tailwind-merge": "^3.3.1",
+    "tailwindcss-animate": "^1.0.7",
+    "uuid": "^11.1.0",
+    "vaul": "^1.1.2",
+    "vinext": "1.0.0-beta.8",
+    "xlsx": "^0.18.5",
+    "z-ai-web-dev-sdk": "^0.0.18",
+    "zod": "^4.0.2",
+    "zustand": "^5.0.6"
+  },
+  "devDependencies": {
+    "@cloudflare/vite-plugin": "1.53.0",
+    "@tailwindcss/postcss": "^4",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-react": "^6.1.0",
+    "@vitejs/plugin-rsc": "0.5.34",
+    "eslint": "^9",
+    "eslint-config-next": "^16.1.1",
+    "prisma": "6.19.3",
+    "tailwindcss": "^4",
+    "tw-animate-css": "^1.3.5",
+    "typescript": "^5",
+    "vite": "8.2.2",
+    "wrangler": "latest"
+  }
 }
