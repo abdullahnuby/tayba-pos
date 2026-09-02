@@ -1,4 +1,4 @@
-import { PrismaClient } from '@prisma/client'
+import { PrismaClient } from '../generated/prisma/client'
 import { PrismaD1 } from '@prisma/adapter-d1'
 import { env as cloudflareEnv } from 'cloudflare:workers'
 
