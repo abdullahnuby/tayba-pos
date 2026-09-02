@@ -6,15 +6,13 @@ Browser
   v
 Cloudflare Worker / Next.js
   |
-  +--> Cloudflare KV (read cache only)
+  +--> Local SQLite database (runtime)
   |
-  +--> Google Apps Script Web App
+  +--> Google Apps Script Web App (daily archive)
           |
           v
       Google Sheets
-      SOURCE OF TRUTH
+      DAILY ARCHIVE / BACKUP
 ```
 
-Writes always go to Apps Script/Sheets. Reads may come from KV for up to a short TTL and then fall back to Sheets. After mutations, cache entries expire quickly so stale reads are bounded.
-
-SQLite/Prisma are not part of the production runtime.
+Daily operations read and write SQLite. Google Sheets is updated by the authenticated archive endpoint `POST /api/sync/archive` and is not used as the hot request path.

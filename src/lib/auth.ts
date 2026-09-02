@@ -48,8 +48,15 @@ function getAuthSecret(): string {
     // Ignore runtime environment access errors.
   }
 
+  if (
+    typeof process !== 'undefined' &&
+    process.env &&
+    process.env.NODE_ENV === 'production'
+  ) {
+    throw new Error('AUTH_SECRET is required in production')
+  }
+
   // Development fallback only.
-  // Production must provide AUTH_SECRET as a Cloudflare secret.
   return 'pos-clothing-store-secret-change-in-prod'
 }
 

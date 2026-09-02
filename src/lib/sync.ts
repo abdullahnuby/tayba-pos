@@ -7,8 +7,7 @@
  * - Test an Apps Script URL independently from the configured URL.
  */
 
-import { cacheDelete } from '@/lib/cloudflare/cache'
-import { sheetsPing, sheetsRead } from '@/lib/sheets-source'
+import { archiveLocalDatabase } from '@/lib/archive'
 import { db } from '@/lib/db'
 
 export interface SyncConfig {
@@ -161,163 +160,44 @@ export async function testAppsScriptConnection(
   }
 }
 
-const ALL_SHEETS = [
-  'Settings',
-  'Categories',
-  'Brands',
-  'Suppliers',
-  'Customers',
-  'Products',
-  'Variants',
-  'Purchases',
-  'PurchaseItems',
-  'Sales',
-  'SaleItems',
-  'SaleReturns',
-  'SaleReturnItems',
-  'CustomerPayments',
-  'SupplierPayments',
-  'StockAdjustments',
-  'RegisterSessions',
-  'AuditLog',
-]
-
-export async function syncSheets(
-  sheetNames: string[]
-): Promise<{
-  ok: boolean
-  synced: string[]
-  errors: string[]
-}> {
-  const errors: string[] = []
-  const synced: string[] = []
-
-  try {
-    await sheetsPing()
-  } catch (e: unknown) {
-    const err = e as { message?: string }
-
-    return {
-      ok: false,
-      synced: [],
-      errors: [
-        err?.message ||
-          'Google Apps Script unavailable',
-      ],
-    }
-  }
-
-  for (const name of sheetNames) {
-    try {
-      await cacheDelete(`tayba:sheet:${name}`)
-      await sheetsRead(name, { force: true })
-      synced.push(name)
-    } catch (e: unknown) {
-      const err = e as { message?: string }
-
-      errors.push(
-        `${name}: ${err?.message || 'read failed'}`
-      )
-    }
-  }
-
-  const now = new Date().toISOString()
-
-  await db.setting.upsert({
-    where: {
-      key: 'lastGoogleSyncAt',
-    },
-    update: {
-      value: now,
-    },
-    create: {
-      key: 'lastGoogleSyncAt',
-      value: now,
-    },
-  })
-
-  return {
-    ok: errors.length === 0,
-    synced,
-    errors,
-  }
-}
-
 export async function syncAllSheets() {
-  return syncSheets(ALL_SHEETS)
+  return archiveLocalDatabase()
 }
 
 export async function syncAfterSale(
   customerId?: string | null
 ) {
   void customerId
-
-  await syncSheets([
-    'Sales',
-    'SaleItems',
-    'Customers',
-  ])
 }
 
 export async function syncAfterPurchase(
   supplierId?: string | null
 ) {
   void supplierId
-
-  await syncSheets([
-    'Purchases',
-    'PurchaseItems',
-    'Variants',
-    'Suppliers',
-  ])
 }
 
 export async function syncAfterReturn(
   customerId?: string | null
 ) {
   void customerId
-
-  await syncSheets([
-    'SaleReturns',
-    'SaleReturnItems',
-    'Variants',
-    'Sales',
-    'Customers',
-  ])
 }
 
 export async function syncAfterCustomerPayment() {
-  await syncSheets([
-    'CustomerPayments',
-    'Customers',
-  ])
 }
 
 export async function syncAfterSupplierPayment() {
-  await syncSheets([
-    'SupplierPayments',
-    'Suppliers',
-  ])
 }
 
 export async function syncAfterAdjustment() {
-  await syncSheets([
-    'StockAdjustments',
-    'Variants',
-  ])
 }
 
 export async function syncAfterProduct() {
-  await syncSheets([
-    'Products',
-    'Variants',
-  ])
 }
 
 export async function getLastSyncAt() {
   const row = await db.setting.findUnique({
     where: {
-      key: 'lastGoogleSyncAt',
+      key: 'lastGoogleArchiveAt',
     },
   })
 

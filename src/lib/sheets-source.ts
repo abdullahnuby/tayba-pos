@@ -5,6 +5,7 @@ export type SheetsRequest = {
   action: 'ping' | 'read' | 'read_many' | 'insert' | 'upsert' | 'update' | 'delete' | 'batch'
   token?: string
   sheet?: string
+  headers?: string[]
   key?: string
   value?: unknown
   rows?: SheetRow[]
@@ -135,6 +136,19 @@ export async function sheetsWriteThrough(
   }
 
   return result
+}
+
+export async function sheetsWriteSnapshot(
+  sheet: string,
+  headers: string[],
+  rows: unknown[][]
+) {
+  return callSheets<{ rowsWritten: number }>({
+    action: 'batch',
+    sheet,
+    headers,
+    rows: rows as unknown as SheetRow[],
+  })
 }
 
 export async function sheetsInvalidate(

@@ -12,6 +12,8 @@
 
 # production
 /build
+/dist/
+/.vinext/
 
 # misc
 .DS_Store
@@ -39,6 +41,8 @@ next-env.d.ts
 # database (dev only)
 /db/*.db
 /db/*.db-journal
+/prisma/db/*.db
+/prisma/db/*.db-journal
 
 # IDE
 .vscode/

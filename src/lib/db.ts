@@ -1,566 +1,434 @@
-/**
- * Google Sheets-backed data facade.
- *
- * Google Sheets is the sole persistent source of truth.
- * Cloudflare KV is a short-lived read cache only.
- *
- * Cloudflare Workers:
- * - Runtime variables and secrets are exposed through process.env
- *   because wrangler.jsonc enables:
- *   nodejs_compat
- *   nodejs_compat_populate_process_env
- */
+import { PrismaClient } from '@prisma/client'
 
-import {
-  cacheGet,
-  cachePut,
-  cacheDelete,
-} from '@/lib/cloudflare/cache'
-
-type AnyRecord = Record<string, any>
-type QueryArgs = AnyRecord
-
-type ModelApi = {
-  findMany(args?: QueryArgs): Promise<any[]>
-  findUnique(args: QueryArgs): Promise<any | null>
-  findUniqueOrThrow(args: QueryArgs): Promise<any>
-  findFirst(args?: QueryArgs): Promise<any | null>
-  count(args?: QueryArgs): Promise<number>
-  aggregate(args?: QueryArgs): Promise<any>
-  create(args: QueryArgs): Promise<any>
-  update(args: QueryArgs): Promise<any>
-  upsert(args: QueryArgs): Promise<any>
-  delete(args: QueryArgs): Promise<any>
-  deleteMany(args?: QueryArgs): Promise<any>
-  fields?: Record<string, string>
+const globalForPrisma = globalThis as unknown as {
+  prisma?: PrismaClient
 }
 
-const MODEL_NAMES = [
-  'user',
-  'category',
-  'brand',
-  'product',
-  'productVariant',
-  'supplier',
-  'customer',
-  'purchase',
-  'purchaseItem',
-  'purchaseReturn',
-  'purchaseReturnItem',
-  'sale',
-  'saleItem',
-  'saleReturn',
-  'saleReturnItem',
-  'customerPayment',
-  'supplierPayment',
-  'setting',
-  'registerSession',
-  'stockAdjustment',
-  'auditLog',
-] as const
+const databaseUrl =
+  process.env.DATABASE_URL || 'file:./db/tayba.db'
 
-const DATE_FIELDS: Record<string, string[]> = {
-  user: ['createdAt', 'updatedAt'],
-  category: ['createdAt'],
-  brand: [],
-  product: ['createdAt', 'updatedAt'],
-  productVariant: ['createdAt', 'updatedAt'],
-  supplier: ['createdAt', 'updatedAt'],
-  customer: ['createdAt', 'updatedAt'],
-
-  purchase: ['date', 'createdAt'],
-  purchaseItem: [],
-
-  purchaseReturn: ['date', 'createdAt'],
-  purchaseReturnItem: [],
-
-  sale: ['date', 'createdAt'],
-  saleItem: [],
-
-  saleReturn: ['date', 'createdAt'],
-  saleReturnItem: [],
-
-  customerPayment: ['date', 'createdAt'],
-  supplierPayment: ['date', 'createdAt'],
-
-  setting: [],
-
-  registerSession: ['openedAt', 'closedAt'],
-
-  stockAdjustment: ['createdAt'],
-  auditLog: ['createdAt'],
-}
-
-const READ_METHODS = new Set([
-  'findMany',
-  'findUnique',
-  'findFirst',
-  'count',
-  'aggregate',
-])
-
-function reviveDates(model: string, value: any): any {
-  if (!value || typeof value !== 'object') {
-    return value
-  }
-
-  if (Array.isArray(value)) {
-    return value.map((v) => reviveDates(model, v))
-  }
-
-  const out: any = { ...value }
-
-  for (const field of DATE_FIELDS[model] || []) {
-    if (
-      out[field] &&
-      typeof out[field] === 'string'
-    ) {
-      out[field] = new Date(out[field])
-    }
-  }
-
-  return out
-}
-
-function keyPart(value: unknown): string {
-  return JSON.stringify(
-    value,
-    (_key, v) =>
-      v instanceof Date
-        ? v.toISOString()
-        : v
-  )
-}
-
-const CACHEABLE_MODELS = new Set([
-  'category',
-  'brand',
-])
-
-function cacheKey(
-  model: string,
-  method: string,
-  args: QueryArgs
-): string {
-  return `tayba:db:v1:${model}:${method}:${keyPart(args)}`
-}
-
-function shouldCache(model: string, method: string): boolean {
-  return READ_METHODS.has(method) && CACHEABLE_MODELS.has(model)
-}
-
-async function request(payload: AnyRecord) {
-  const {
-    model,
-    method,
-    args = {},
-  } = payload as {
-    model: string
-    method: string
-    args: QueryArgs
-  }
-
-  const key = cacheKey(
-    model,
-    method,
-    args
-  )
-
-  if (shouldCache(model, method)) {
-    const cached = await cacheGet<any>(key)
-
-    if (cached !== null) {
-      return cached
-    }
-  }
-
-  /**
-   * Cloudflare Workers exposes configured vars/secrets
-   * through process.env when:
-   *
-   * nodejs_compat
-   * nodejs_compat_populate_process_env
-   *
-   * are enabled in wrangler.jsonc.
-   */
-  const url = process.env.GOOGLE_APPS_SCRIPT_URL || ''
-  const token = process.env.GOOGLE_APPS_SCRIPT_TOKEN || ''
-
-  if (!url) {
-    throw new Error(
-      'Google Sheets backend is not configured: GOOGLE_APPS_SCRIPT_URL is missing'
-    )
-  }
-
-  if (!token) {
-    throw new Error(
-      'Google Sheets backend is not configured: GOOGLE_APPS_SCRIPT_TOKEN is missing'
-    )
-  }
-
-  const res = await fetch(url, {
-    method: 'POST',
-
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
+export const db: any =
+  globalForPrisma.prisma ??
+  new PrismaClient({
+    datasources: {
+      db: {
+        url: databaseUrl,
+      },
     },
-
-    body: JSON.stringify({
-      action: 'query',
-      token,
-      ...serialize(payload),
-    }),
+    log:
+      process.env.NODE_ENV === 'development'
+        ? ['warn', 'error']
+        : ['error'],
   })
 
-  const body =
-    (await res.json().catch(() => ({}))) as AnyRecord
+if (process.env.NODE_ENV !== 'production') {
+  globalForPrisma.prisma = db
+}
 
-  if (!res.ok || !body.ok) {
-    throw new Error(
-      body.error ||
-        `Sheets backend HTTP ${res.status}`
-    )
-  }
+const fieldAliases = {
+  minQuantity: 'minQuantity',
+  reorderQty: 'reorderQty',
+}
 
-  const result = body.data
+Object.defineProperty(db.productVariant, 'fields', {
+  value: fieldAliases,
+  enumerable: false,
+  configurable: true,
+})
 
-  if (shouldCache(model, method)) {
-    await cachePut(
-      key,
-      result,
-      20
-    )
-  }
+function parseNumber(value: unknown, fallback = 0): number {
+  const num = Number(value)
+  return Number.isFinite(num) ? num : fallback
+}
 
-  return result
+async function buildInvoiceNumber(tx: any, prefixKey: string, counterKey: string, fallbackPrefix: string): Promise<string> {
+  const prefixRow = await tx.setting.findUnique({ where: { key: prefixKey } })
+  const counterRow = await tx.setting.findUnique({ where: { key: counterKey } })
+  const prefix = (prefixRow ? prefixRow.value : fallbackPrefix) || fallbackPrefix
+  const current = parseNumber(counterRow?.value, 0)
+  const next = Math.max(0, current) + 1
+  const normalized = String(next).padStart(6, '0')
+  await tx.setting.upsert({
+    where: { key: counterKey },
+    create: { key: counterKey, value: String(next) },
+    update: { value: String(next) },
+  })
+  return `${prefix}-${normalized}`
 }
 
 export async function atomicAction<T = any>(
   action: string,
-  payload: AnyRecord = {}
+  payload: Record<string, any> = {}
 ): Promise<T> {
-  const url = process.env.GOOGLE_APPS_SCRIPT_URL || ''
-  const token = process.env.GOOGLE_APPS_SCRIPT_TOKEN || ''
+  const input = payload.payload ?? payload
 
-  if (!url) {
-    throw new Error(
-      'Google Sheets backend is not configured: GOOGLE_APPS_SCRIPT_URL is missing'
-    )
-  }
+  switch (action) {
+    case 'commit_sale': {
+      const items = Array.isArray(input.items) ? input.items : []
+      if (!items.length) throw new Error('الفاتورة يجب أن تحتوي على منتج واحد على الأقل')
 
-  if (!token) {
-    throw new Error(
-      'Google Sheets backend is not configured: GOOGLE_APPS_SCRIPT_TOKEN is missing'
-    )
-  }
+      const subtotal = items.reduce(
+        (sum: number, item: any) => sum + Number(item.unitPrice || 0) * Number(item.quantity || 0),
+        0
+      )
+      const discount = parseNumber(input.discount, 0)
+      const taxEnabled = String(await db.setting.findUnique({ where: { key: 'vatEnabled' } })?.value || 'false').toLowerCase() === 'true'
+      const vatRate = parseNumber((await db.setting.findUnique({ where: { key: 'vatRate' } })?.value) || 14, 14)
+      const afterDiscount = Math.max(0, subtotal - discount)
+      const taxAmount = taxEnabled ? afterDiscount * (vatRate / 100) : 0
+      const total = afterDiscount + taxAmount
+      const paid = parseNumber(input.paid, 0)
+      const change = Math.max(0, paid - total)
+      const status = input.status || 'completed'
+      const completed = status === 'completed'
 
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json',
-      'cache-control': 'no-store',
-    },
-    body: JSON.stringify({
-      action,
-      token,
-      ...serialize(payload),
-    }),
-  })
-
-  const body =
-    (await res.json().catch(() => ({}))) as AnyRecord
-
-  if (!res.ok || !body.ok) {
-    throw new Error(
-      body.error ||
-        `Sheets backend HTTP ${res.status}`
-    )
-  }
-
-  return body.data as T
-}
-
-function serialize(value: unknown): unknown {
-  if (value instanceof Date) {
-    return value.toISOString()
-  }
-
-  if (Array.isArray(value)) {
-    return value.map(serialize)
-  }
-
-  if (
-    value &&
-    typeof value === 'object'
-  ) {
-    return Object.fromEntries(
-      Object.entries(
-        value as AnyRecord
-      ).map(([key, val]) => [
-        key,
-        serialize(val),
-      ])
-    )
-  }
-
-  return value
-}
-
-async function invalidateModel(
-  model: string
-) {
-  if (!CACHEABLE_MODELS.has(model)) return
-  await cacheDelete(`tayba:sheet:${model}`)
-}
-
-function modelApi(
-  model: string
-): ModelApi {
-  if (
-    !MODEL_NAMES.includes(
-      model as any
-    )
-  ) {
-    throw new Error(
-      `Unsupported model: ${model}`
-    )
-  }
-
-  return {
-    findMany: async (
-      args = {}
-    ) =>
-      reviveDates(
-        model,
-        await request({
-          model,
-          method: 'findMany',
-          args,
+      const sale = await db.$transaction(async (tx) => {
+        const saleData = await tx.sale.create({
+          data: {
+            invoiceNo: await buildInvoiceNumber(tx, 'saleInvoicePrefix', 'saleCounter', 'INV'),
+            customerId: input.customerId || null,
+            userId: input.userId || null,
+            date: new Date(input.date || Date.now()),
+            subtotal,
+            discount,
+            taxRate: taxEnabled ? vatRate : 0,
+            taxAmount,
+            total,
+            paid,
+            change,
+            paymentMethod: input.paymentMethod || 'cash',
+            status,
+            notes: input.notes || null,
+          },
         })
-      ),
 
-    findUnique: async (
-      args
-    ) =>
-      reviveDates(
-        model,
-        await request({
-          model,
-          method: 'findUnique',
-          args,
-        })
-      ),
+        const createdItems: any[] = []
+        const decrements = new Map<string, number>()
 
-    findUniqueOrThrow: async (
-      args
-    ) => {
-      const row =
-        reviveDates(
-          model,
-          await request({
-            model,
-            method: 'findUnique',
-            args,
-          })
-        )
+        for (const item of items) {
+          const variantId = String(item.variantId)
+          const variant = await tx.productVariant.findUnique({ where: { id: variantId } })
+          if (!variant) throw new Error('بعض المنتجات غير موجودة')
 
-      if (!row) {
-        throw Object.assign(
-          new Error(
-            `${model} not found`
-          ),
-          {
-            code: 'P2025',
+          const qty = Number(item.quantity || 0)
+          if (completed && variant.quantity < qty) {
+            throw new Error(`المخزون غير كافٍ لـ ${variant.sku || variant.id}`)
           }
-        )
-      }
 
-      return row
-    },
+          decrements.set(variantId, (decrements.get(variantId) || 0) + qty)
 
-    findFirst: async (
-      args = {}
-    ) =>
-      reviveDates(
-        model,
-        await request({
-          model,
-          method: 'findFirst',
-          args,
-        })
-      ),
-
-    count: async (
-      args = {}
-    ) =>
-      Number(
-        await request({
-          model,
-          method: 'count',
-          args,
-        })
-      ),
-
-    aggregate: async (
-      args = {}
-    ) =>
-      request({
-        model,
-        method: 'aggregate',
-        args,
-      }),
-
-    create: async (
-      args
-    ) => {
-      const result =
-        reviveDates(
-          model,
-          await request({
-            model,
-            method: 'create',
-            args,
+          const saleItem = await tx.saleItem.create({
+            data: {
+              saleId: saleData.id,
+              variantId,
+              quantity: qty,
+              unitPrice: Number(item.unitPrice || 0),
+              unitCost: Number(variant.costPrice || 0),
+              total: Number(item.unitPrice || 0) * qty,
+            },
           })
-        )
 
-      await invalidateModel(
-        model
-      )
-
-      return result
-    },
-
-    update: async (
-      args
-    ) => {
-      const result =
-        reviveDates(
-          model,
-          await request({
-            model,
-            method: 'update',
-            args,
-          })
-        )
-
-      await invalidateModel(
-        model
-      )
-
-      return result
-    },
-
-    upsert: async (
-      args
-    ) => {
-      const result =
-        reviveDates(
-          model,
-          await request({
-            model,
-            method: 'upsert',
-            args,
-          })
-        )
-
-      await invalidateModel(
-        model
-      )
-
-      return result
-    },
-
-    delete: async (
-      args
-    ) => {
-      const result =
-        reviveDates(
-          model,
-          await request({
-            model,
-            method: 'delete',
-            args,
-          })
-        )
-
-      await invalidateModel(
-        model
-      )
-
-      return result
-    },
-
-    deleteMany: async (
-      args = {}
-    ) => {
-      const result =
-        await request({
-          model,
-          method: 'deleteMany',
-          args,
-        })
-
-      await invalidateModel(
-        model
-      )
-
-      return result
-    },
-
-    fields:
-      model === 'productVariant'
-        ? {
-            minQuantity:
-              'minQuantity',
-            reorderQty:
-              'reorderQty',
-          }
-        : {},
-  }
-}
-
-const dbTarget: AnyRecord = {
-  $transaction:
-    async <T>(
-      fn: (
-        tx: any
-      ) => Promise<T>
-    ) => fn(db),
-
-  $disconnect:
-    async () => undefined,
-
-  $connect:
-    async () => undefined,
-}
-
-export const db: any =
-  new Proxy(
-    dbTarget,
-    {
-      get(
-        target,
-        prop
-      ) {
-        if (
-          prop in target
-        ) {
-          return target[
-            prop as any
-          ]
+          createdItems.push(saleItem)
         }
 
-        if (
-          typeof prop ===
-          'string'
-        ) {
-          return modelApi(
-            prop
-          )
+        if (completed) {
+          for (const [variantId, qty] of decrements) {
+            await tx.productVariant.update({
+              where: { id: variantId },
+              data: {
+                quantity: { decrement: qty },
+              },
+            })
+          }
+
+          if (input.customerId && total - paid > 0) {
+            await tx.customer.update({
+              where: { id: input.customerId },
+              data: {
+                balance: { increment: total - paid },
+              },
+            })
+          }
         }
 
-        return undefined
-      },
+        return {
+          ...saleData,
+          items: createdItems,
+        }
+      })
+
+      return sale as T
     }
-  )
+
+    case 'commit_sale_return': {
+      const items = Array.isArray(input.items) ? input.items : []
+      const sale = await db.sale.findUnique({
+        where: { id: input.saleId },
+        include: { items: true },
+      })
+      if (!sale) throw new Error('الفاتورة غير موجودة')
+
+      const createdReturn = await db.$transaction(async (tx) => {
+        const returnNo = await buildInvoiceNumber(tx, 'returnPrefix', 'returnCounter', 'RET')
+        const created = await tx.saleReturn.create({
+          data: {
+            returnNo,
+            saleId: sale.id,
+            customerId: sale.customerId || null,
+            date: new Date(input.date || Date.now()),
+            subtotal: 0,
+            total: 0,
+            reason: input.reason || null,
+            notes: input.notes || null,
+            status: 'completed',
+          },
+        })
+
+        let subtotal = 0
+        for (const item of items) {
+          const saleItem = await tx.saleItem.findUnique({ where: { id: item.saleItemId } })
+          if (!saleItem) throw new Error('بند الفاتورة غير صحيح')
+          const qty = Number(item.quantity || 0)
+          subtotal += Number(item.unitPrice || 0) * qty
+
+          await tx.saleReturnItem.create({
+            data: {
+              saleReturnId: created.id,
+              saleItemId: saleItem.id,
+              variantId: saleItem.variantId,
+              quantity: qty,
+              unitPrice: Number(item.unitPrice || 0),
+              total: Number(item.unitPrice || 0) * qty,
+            },
+          })
+
+          await tx.productVariant.update({
+            where: { id: saleItem.variantId },
+            data: {
+              quantity: { increment: qty },
+            },
+          })
+        }
+
+        await tx.saleReturn.update({
+          where: { id: created.id },
+          data: {
+            subtotal,
+            total: subtotal,
+          },
+        })
+
+        const allReturned = sale.items.every((saleItem) => {
+          const returnedQty = items
+            .filter((it: any) => it.saleItemId === saleItem.id)
+            .reduce((sum, it) => sum + Number(it.quantity || 0), 0)
+          return returnedQty >= saleItem.quantity
+        })
+
+        await tx.sale.update({
+          where: { id: sale.id },
+          data: {
+            status: allReturned ? 'returned' : 'partial_return',
+          },
+        })
+
+        return { ...created, subtotal, total: subtotal }
+      })
+
+      return createdReturn as T
+    }
+
+    case 'commit_purchase': {
+      const items = Array.isArray(input.items) ? input.items : []
+      if (!items.length) throw new Error('فاتورة الشراء يجب أن تحتوي على بند واحد على الأقل')
+
+      const subtotal = items.reduce(
+        (sum: number, item: any) => sum + Number(item.unitCost || 0) * Number(item.quantity || 0),
+        0
+      )
+      const discount = parseNumber(input.discount, 0)
+      const taxEnabled = String(await db.setting.findUnique({ where: { key: 'vatEnabled' } })?.value || 'false').toLowerCase() === 'true'
+      const vatRate = parseNumber((await db.setting.findUnique({ where: { key: 'vatRate' } })?.value) || 14, 14)
+      const afterDiscount = Math.max(0, subtotal - discount)
+      const taxAmount = taxEnabled ? afterDiscount * (vatRate / 100) : 0
+      const total = afterDiscount + taxAmount
+      const paid = parseNumber(input.paid, 0)
+      const completed = (input.status || 'completed') === 'completed'
+
+      const purchase = await db.$transaction(async (tx) => {
+        const created = await tx.purchase.create({
+          data: {
+            invoiceNo: await buildInvoiceNumber(tx, 'purchaseInvoicePrefix', 'purchaseCounter', 'PUR'),
+            supplierId: input.supplierId,
+            date: new Date(input.date || Date.now()),
+            subtotal,
+            discount,
+            taxRate: taxEnabled ? vatRate : 0,
+            taxAmount,
+            total,
+            paid,
+            status: input.status || 'completed',
+            notes: input.notes || null,
+          },
+        })
+
+        for (const item of items) {
+          const variantId = String(item.variantId)
+          const variant = await tx.productVariant.findUnique({ where: { id: variantId } })
+          if (!variant) throw new Error('بعض المنتجات غير موجودة')
+          const qty = Number(item.quantity || 0)
+          const unitCost = Number(item.unitCost || 0)
+
+          await tx.purchaseItem.create({
+            data: {
+              purchaseId: created.id,
+              variantId,
+              quantity: qty,
+              unitCost,
+              total: unitCost * qty,
+              enteredQuantity: Number(item.enteredQuantity || qty),
+              unit: item.unit || 'piece',
+              unitFactor: Number(item.unitFactor || 1),
+            },
+          })
+
+          if (completed) {
+            await tx.productVariant.update({
+              where: { id: variantId },
+              data: {
+                quantity: { increment: qty },
+                costPrice: ((variant.quantity * variant.costPrice) + (qty * unitCost)) / Math.max(1, variant.quantity + qty),
+              },
+            })
+          }
+        }
+
+        if (completed && total - paid > 0) {
+          await tx.supplier.update({
+            where: { id: input.supplierId },
+            data: {
+              balance: { increment: total - paid },
+            },
+          })
+        }
+
+        return { ...created, items }
+      })
+
+      return purchase as T
+    }
+
+    case 'void_sale': {
+      const sale = await db.sale.findUnique({ where: { id: input.saleId }, include: { items: true } })
+      if (!sale) throw new Error('الفاتورة غير موجودة')
+      return await db.$transaction(async (tx) => {
+        for (const item of sale.items) {
+          await tx.productVariant.update({
+            where: { id: item.variantId },
+            data: {
+              quantity: { increment: item.quantity },
+            },
+          })
+        }
+        if (sale.customerId && Number(sale.total || 0) - Number(sale.paid || 0) > 0) {
+          await tx.customer.update({
+            where: { id: sale.customerId },
+            data: { balance: { decrement: Number(sale.total || 0) - Number(sale.paid || 0) } },
+          })
+        }
+        return tx.sale.update({
+          where: { id: sale.id },
+          data: {
+            status: 'voided',
+            voidReason: input.voidReason || 'إلغاء بدون سبب',
+          },
+        })
+      })
+    }
+
+    case 'resume_sale': {
+      const sale = await db.sale.findUnique({ where: { id: input.saleId }, include: { items: true } })
+      if (!sale) throw new Error('الفاتورة غير موجودة')
+      return await db.$transaction(async (tx) => {
+        for (const item of sale.items) {
+          const variant = await tx.productVariant.findUnique({ where: { id: item.variantId } })
+          if (!variant || variant.quantity < item.quantity) {
+            throw new Error('مخزون غير كافٍ')
+          }
+        }
+        for (const item of sale.items) {
+          await tx.productVariant.update({
+            where: { id: item.variantId },
+            data: { quantity: { decrement: item.quantity } },
+          })
+        }
+        return tx.sale.update({
+          where: { id: sale.id },
+          data: { status: 'completed' },
+        })
+      })
+    }
+
+    case 'commit_stock_adjustment': {
+      const payloadItem = input.payload ?? input
+      const variantId = String(payloadItem.variantId)
+      const change = Number(payloadItem.quantityChange || 0)
+      if (!change) throw new Error('قيمة التعديل غير صحيحة')
+      const variant = await db.productVariant.findUnique({ where: { id: variantId } })
+      if (!variant) throw new Error('المنتج غير موجود')
+      const nextQuantity = variant.quantity + change
+      if (nextQuantity < 0) throw new Error('التعديل سيؤدي إلى مخزون سالب')
+
+      return await db.$transaction(async (tx) => {
+        const created = await tx.stockAdjustment.create({
+          data: {
+            variantId,
+            userId: payloadItem.userId || null,
+            type: payloadItem.type || 'adjustment',
+            quantityChange: change,
+            reason: payloadItem.reason || null,
+            notes: payloadItem.notes || null,
+          },
+        })
+
+        await tx.productVariant.update({
+          where: { id: variantId },
+          data: { quantity: nextQuantity },
+        })
+
+        return created
+      })
+    }
+
+    case 'void_purchase': {
+      const purchase = await db.purchase.findUnique({ where: { id: input.purchaseId }, include: { items: true } })
+      if (!purchase) throw new Error('فاتورة الشراء غير موجودة')
+      return await db.$transaction(async (tx) => {
+        for (const item of purchase.items) {
+          const variant = await tx.productVariant.findUnique({ where: { id: item.variantId } })
+          const newQty = (variant?.quantity || 0) - item.quantity
+          if (newQty < 0) throw new Error('لا يمكن إلغاء الشراء')
+          await tx.productVariant.update({
+            where: { id: item.variantId },
+            data: { quantity: newQty },
+          })
+        }
+        if (purchase.supplierId && Number(purchase.total || 0) - Number(purchase.paid || 0) > 0) {
+          await tx.supplier.update({
+            where: { id: purchase.supplierId },
+            data: { balance: { decrement: Number(purchase.total || 0) - Number(purchase.paid || 0) } },
+          })
+        }
+        return tx.purchase.update({
+          where: { id: purchase.id },
+          data: { status: 'voided', notes: (purchase.notes || '') + ` [void: ${input.voidReason || 'إلغاء بدون سبب'}]` },
+        })
+      })
+    }
+
+    default:
+      throw new Error(`Unsupported atomic action: ${action}`)
+  }
+}
+
+export type DatabaseModelName = keyof PrismaClient
