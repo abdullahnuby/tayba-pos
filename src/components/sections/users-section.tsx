@@ -21,7 +21,7 @@ import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription,
   AlertDialogFooter, AlertDialogHeader, AlertDialogTitle, AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
-import { UserPlus, KeyRound, Trash2, Users as UsersIcon } from 'lucide-react'
+import { UserPlus, KeyRound, Trash2, Users as UsersIcon, Hash } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface AppUser {
@@ -31,6 +31,7 @@ interface AppUser {
   role: 'admin' | 'manager' | 'cashier'
   active: boolean
   createdAt?: string
+  hasPin?: boolean
 }
 
 const ROLE_LABEL: Record<string, string> = {
@@ -47,10 +48,13 @@ export function UsersSection() {
   })
 
   const [addOpen, setAddOpen] = useState(false)
-  const [newUser, setNewUser] = useState({ username: '', password: '', name: '', role: 'cashier' })
+  const [newUser, setNewUser] = useState({ username: '', password: '', name: '', role: 'cashier', pin: '' })
 
   const [resetTarget, setResetTarget] = useState<AppUser | null>(null)
   const [resetPassword, setResetPassword] = useState('')
+
+  const [pinTarget, setPinTarget] = useState<AppUser | null>(null)
+  const [pinValue, setPinValue] = useState('')
 
   const createMutation = useMutation({
     mutationFn: async () => {
@@ -67,7 +71,7 @@ export function UsersSection() {
       qc.invalidateQueries({ queryKey: ['users'] })
       toast.success('تم إنشاء المستخدم — لازم يغيّر كلمة السر أول ما يدخل')
       setAddOpen(false)
-      setNewUser({ username: '', password: '', name: '', role: 'cashier' })
+      setNewUser({ username: '', password: '', name: '', role: 'cashier', pin: '' })
     },
     onError: (e: Error) => toast.error(e.message),
   })
@@ -99,6 +103,24 @@ export function UsersSection() {
     },
     onError: (e: Error) => toast.error(e.message),
   })
+
+  function submitPin() {
+    if (!pinTarget) return
+    if (!/^[0-9]{2,6}$/.test(pinValue)) {
+      toast.error('الرقم السري لازم يكون من 2 إلى 6 أرقام')
+      return
+    }
+    patchMutation.mutate(
+      { id: pinTarget.id, data: { pin: pinValue } },
+      {
+        onSuccess: () => {
+          toast.success('تم تحديد الرقم السري للوردية')
+          setPinTarget(null)
+          setPinValue('')
+        },
+      }
+    )
+  }
 
   function submitReset() {
     if (!resetTarget) return
@@ -187,6 +209,16 @@ export function UsersSection() {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="space-y-2">
+                <Label>الرقم السري للوردية (اختياري الآن)</Label>
+                <Input
+                  dir="ltr"
+                  inputMode="numeric"
+                  value={newUser.pin}
+                  onChange={(e) => setNewUser((s) => ({ ...s, pin: e.target.value.replace(/\D/g, '').slice(0, 6) }))}
+                  placeholder="2 إلى 6 أرقام — لفتح وقفل الوردية فقط"
+                />
+              </div>
             </div>
             <DialogFooter>
               <Button
@@ -254,6 +286,51 @@ export function UsersSection() {
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center justify-end gap-1">
+                        <Dialog
+                          open={pinTarget?.id === u.id}
+                          onOpenChange={(open) => {
+                            if (!open) {
+                              setPinTarget(null)
+                              setPinValue('')
+                            } else {
+                              setPinTarget(u)
+                            }
+                          }}
+                        >
+                          <DialogTrigger asChild>
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              title={u.hasPin ? 'تغيير الرقم السري للوردية' : 'تحديد الرقم السري للوردية'}
+                            >
+                              <Hash className={`size-4 ${u.hasPin ? '' : 'text-destructive'}`} />
+                            </Button>
+                          </DialogTrigger>
+                          <DialogContent>
+                            <DialogHeader>
+                              <DialogTitle>الرقم السري للوردية — {u.name}</DialogTitle>
+                              <DialogDescription>
+                                رقم مختلف عن كلمة السر، بيستخدمه الكاشير بس عشان يفتح ويقفل ورديته.
+                              </DialogDescription>
+                            </DialogHeader>
+                            <div className="space-y-2 py-2">
+                              <Label>الرقم السري (2 إلى 6 أرقام)</Label>
+                              <Input
+                                dir="ltr"
+                                inputMode="numeric"
+                                value={pinValue}
+                                onChange={(e) => setPinValue(e.target.value.replace(/\D/g, '').slice(0, 6))}
+                                placeholder="مثال: 123"
+                              />
+                            </div>
+                            <DialogFooter>
+                              <Button onClick={submitPin} disabled={patchMutation.isPending}>
+                                حفظ
+                              </Button>
+                            </DialogFooter>
+                          </DialogContent>
+                        </Dialog>
+
                         <Dialog
                           open={resetTarget?.id === u.id}
                           onOpenChange={(open) => {
