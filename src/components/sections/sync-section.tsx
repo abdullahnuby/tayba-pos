@@ -38,6 +38,8 @@ export function SyncSection() {
   const [viewData, setViewData] = useState<{ headers: string[]; rows: string[][]; url: string; count: number } | null>(null)
   const [showPrivateKey, setShowPrivateKey] = useState(false)
   const [appsScriptUrl, setAppsScriptUrl] = useState('')
+  const [appsScriptToken, setAppsScriptToken] = useState('')
+  const [showAppsScriptToken, setShowAppsScriptToken] = useState(false)
   const [appsScriptTestResult, setAppsScriptTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const { data: settings = {}, isLoading: loadingSettings } = useQuery<Record<string, string>>({
@@ -162,6 +164,12 @@ export function SyncSection() {
   function saveAppsScriptUrl() {
     if (!appsScriptUrl) return toast.error('أدخل الرابط')
     saveSettingsMutation.mutate({ appsScriptUrl })
+  }
+
+  function saveAppsScriptToken() {
+    if (!appsScriptToken) return toast.error('أدخل التوكن')
+    saveSettingsMutation.mutate({ appsScriptToken })
+    setAppsScriptToken('') // clear from the form after saving; never re-display the real value
   }
 
   const testAppsScriptMutation = useMutation({
@@ -333,13 +341,52 @@ export function SyncSection() {
             >
               <Eye className="size-4" /> {testAppsScriptMutation.isPending ? 'جارٍ الاختبار...' : 'اختبار الاتصال'}
             </Button>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-1.5">
+            <Label htmlFor="appsScriptToken">توكن Apps Script (TAYBA_API_TOKEN)</Label>
+            <div className="flex gap-2">
+              <Input
+                id="appsScriptToken"
+                type={showAppsScriptToken ? 'text' : 'password'}
+                placeholder={settings.appsScriptTokenSet ? 'محفوظ بالفعل — اكتب قيمة جديدة لتغييره' : 'الصق نفس القيمة الموجودة في Script Properties'}
+                value={appsScriptToken}
+                onChange={(e) => setAppsScriptToken(e.target.value)}
+                dir="ltr"
+                className="h-11 font-mono"
+              />
+              <Button type="button" variant="outline" size="icon" className="h-11 w-11 shrink-0" onClick={() => setShowAppsScriptToken((v) => !v)}>
+                <Eye className="size-4" />
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              لازم يكون نفس القيمة بالحرف الواحد الموجودة في Apps Script Editor ← Project Settings ← Script Properties ← <code className="font-mono">TAYBA_API_TOKEN</code>. من غيره المزامنة الفعلية هتفشل حتى لو "اختبار الاتصال" نجح.
+            </p>
+            {settings.appsScriptTokenSet && (
+              <p className="text-xs text-emerald-600 dark:text-emerald-400 flex items-center gap-1">
+                <CheckCircle2 className="size-3.5" /> محفوظ حاليًا: {settings.appsScriptTokenMasked}
+              </p>
+            )}
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button onClick={saveAppsScriptToken} variant="outline">
+              <CloudUpload className="size-4" /> حفظ التوكن
+            </Button>
             <Button
               onClick={() => googleSyncMutation.mutate()}
-              disabled={googleSyncMutation.isPending || !settings.appsScriptUrl}
+              disabled={googleSyncMutation.isPending || !settings.appsScriptUrl || !settings.appsScriptTokenSet}
             >
               <RefreshCw className={`size-4 ${googleSyncMutation.isPending ? 'animate-spin' : ''}`} />
               {googleSyncMutation.isPending ? 'جارٍ المزامنة...' : 'مزامنة الآن'}
             </Button>
+            {settings.appsScriptUrl && !settings.appsScriptTokenSet && (
+              <p className="text-xs text-amber-600 dark:text-amber-400 self-center">
+                لازم تحفظ التوكن الأول عشان زرار المزامنة يشتغل
+              </p>
+            )}
           </div>
 
           {appsScriptTestResult && (

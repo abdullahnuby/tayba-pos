@@ -14,6 +14,12 @@ export async function GET(req: NextRequest) {
     obj.googlePrivateKeyMasked = obj.googlePrivateKey.slice(0, 20) + '...[hidden]'
     delete obj.googlePrivateKey
   }
+  // Never send the raw Apps Script token back to the client — only a flag + short mask.
+  if (obj.appsScriptToken) {
+    obj.appsScriptTokenSet = 'true'
+    obj.appsScriptTokenMasked = obj.appsScriptToken.slice(0, 4) + '...[hidden]'
+    delete obj.appsScriptToken
+  }
   return NextResponse.json(obj)
 }
 
