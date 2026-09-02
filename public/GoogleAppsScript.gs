@@ -23,6 +23,7 @@ function doGet() {
 }
 
 function doPost(e) {
+  _rowsCache = {}; // fresh per-request cache — never persists across separate HTTP calls
   try {
     var data = JSON.parse(e.postData.contents || '{}');
     assertToken(data.token);
@@ -47,6 +48,18 @@ function doPost(e) {
         var single = writeSnapshotSheet(SpreadsheetApp.getActiveSpreadsheet(), data.sheet, data.headers, data.rows || []);
         return jsonResponse({ ok: true, data: single });
       } finally { singleLock.releaseLock(); }
+    }
+
+    // Only mutating/atomic actions need the global lock (to serialize writes and prevent
+    // races like double stock decrements). Plain reads (read/read_many/query) — which is
+    // what every page load actually does (products, sales, dashboard...) — were previously
+    // queuing behind the SAME lock as writes, so every read had to wait for every other read
+    // and write to finish first. That serialization, not Sheets itself, was the main cause
+    // of the app feeling slow: concurrent requests ran one-at-a-time instead of in parallel.
+    var READ_ONLY_ACTIONS = { read: 1, read_many: 1, query: 1 };
+    if (READ_ONLY_ACTIONS[data.action]) {
+      var readResult = executeAction(data);
+      return jsonResponse({ ok: true, data: readResult });
     }
 
     var lock = LockService.getScriptLock();
@@ -191,6 +204,7 @@ function updateRow(ss, name, key, value) {
 }
 
 function deleteRow(ss, name, key, value) {
+  _rowsCache = null; // invalidate — same reasoning as writeRow
   var sheet = ss.getSheetByName(name);
   if (!sheet) return { deleted: false };
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
@@ -256,7 +270,18 @@ function qNormalize(v) {
   if (typeof v === 'string' && /^\d{4}-\d\d-\d\dT/.test(v)) return v;
   return v;
 }
-function getRows(model) { var ss=SpreadsheetApp.getActiveSpreadsheet(); var name=MODEL_SHEETS[model] || model; ensureSheet(ss,name,Object.keys(modelDefaults(model))); return readSheet(ss,name); }
+var _rowsCache = null;
+function getRows(model) {
+  var ss=SpreadsheetApp.getActiveSpreadsheet(); var name=MODEL_SHEETS[model] || model; ensureSheet(ss,name,Object.keys(modelDefaults(model)));
+  // Cache within a single request only (reset in executeAction below). Nested relation
+  // resolution (e.g. products -> variants -> product -> category) previously re-read the
+  // same sheet from scratch multiple times per request; this avoids that redundant I/O
+  // without ever serving data across separate requests.
+  if (_rowsCache && Object.prototype.hasOwnProperty.call(_rowsCache, model)) return _rowsCache[model];
+  var rows = readSheet(ss,name);
+  if (_rowsCache) _rowsCache[model] = rows;
+  return rows;
+}
 function headerForModel(model) { return Object.keys(modelDefaults(model)); }
 function modelDefaults(model) {
   var d={id:''};
@@ -267,7 +292,7 @@ function modelDefaults(model) {
   if (model==='productVariant') Object.assign(d,{productId:'',sku:'',barcode:null,size:null,color:null,material:null,costPrice:0,sellPrice:0,quantity:0,minQuantity:5,reorderQty:10,baseUnit:'piece',purchaseUnit:'piece',purchaseUnitFactor:1,saleUnit:'piece',saleUnitFactor:1,quarterDozenPrice:null,halfDozenPrice:null,dozenPrice:null,createdAt:'',updatedAt:''});
   if (model==='supplier') Object.assign(d,{name:'',phone:null,address:null,notes:null,balance:0,createdAt:'',updatedAt:''});
   if (model==='customer') Object.assign(d,{name:'',phone:null,address:null,notes:null,balance:0,loyaltyPoints:0,createdAt:'',updatedAt:''});
-  if (model==='purchase') Object.assign(d,{invoiceNo:'',supplierId:'',date:'',subtotal:0,discount:0,taxRate:0,taxAmount:0,total:0,paid:0,status:'completed',notes:null,createdAt:''});
+  if (model==='purchase') Object.assign(d,{invoiceNo:'',supplierId:'',date:'',subtotal:0,discount:0,taxRate:0,taxAmount:0,total:0,paid:0,paymentMethod:'cash',status:'completed',notes:null,createdAt:''});
   if (model==='purchaseItem') Object.assign(d,{purchaseId:'',variantId:'',quantity:0,unitCost:0,total:0,enteredQuantity:null,unit:'piece',unitFactor:1});
   if (model==='purchaseReturn') Object.assign(d,{returnNo:'',purchaseId:'',supplierId:'',date:'',total:0,reason:null,notes:null,status:'completed',createdAt:''});
   if (model==='purchaseReturnItem') Object.assign(d,{purchaseReturnId:'',variantId:'',quantity:0,unitCost:0,total:0});
@@ -278,8 +303,8 @@ function modelDefaults(model) {
   if (model==='customerPayment') Object.assign(d,{customerId:'',saleId:null,saleReturnId:null,amount:0,method:'cash',date:'',notes:null,createdAt:''});
   if (model==='supplierPayment') Object.assign(d,{supplierId:'',purchaseId:null,purchaseReturnId:null,amount:0,method:'cash',date:'',notes:null,createdAt:''});
   if (model==='setting') Object.assign(d,{key:'',value:''});
-  if (model==='registerSession') Object.assign(d,{id:'',userId:'',openedAt:'',closedAt:null,openingCash:0,closingCash:null,expectedCash:null,status:'open',notes:null,createdAt:''});
-  if (model==='stockAdjustment') Object.assign(d,{variantId:'',userId:'',quantity:0,reason:'',notes:null,date:'',createdAt:''});
+  if (model==='registerSession') Object.assign(d,{userId:'',openedAt:'',closedAt:null,openingFloat:0,closingFloat:null,expectedCash:null,difference:null,cashSales:0,cardSales:0,transferSales:0,notes:null,status:'open'});
+  if (model==='stockAdjustment') Object.assign(d,{variantId:'',productId:null,userId:null,type:'adjustment',quantityChange:0,reason:null,notes:null,createdAt:''});
   if (model==='auditLog') Object.assign(d,{userId:null,action:'',entity:'',entityId:null,before:null,after:null,ip:null,createdAt:''});
   return d;
 }
@@ -363,7 +388,7 @@ function nextNumberAtomic(counterKey, prefixKey, fallbackPrefix) {
   if (setting) {
     updateModelRow('setting', setting.id, { value: value });
   } else {
-    createModelRow('setting', { key: key, value: value });
+    createModelRow('setting', { key: counterKey, value: value });
   }
   return String(prefix) + '-' + String(next).padStart(6, '0');
 }
@@ -872,6 +897,7 @@ function findByUnique(rows, where){
   return rows.find(function(r){return String(r[key])===String(where[key]);})||null;
 }
 function writeRow(model,row, mode, whereKey){
+  _rowsCache = null; // invalidate — a write must never be masked by a stale in-request read cache
   var ss=SpreadsheetApp.getActiveSpreadsheet(), name=MODEL_SHEETS[model], sheet=ensureSheet(ss,name,Object.keys(modelDefaults(model)));
   var headers=sheet.getRange(1,1,1,sheet.getLastColumn()).getValues()[0].map(String);
   var values=sheet.getDataRange().getValues(); var idx=whereKey?headers.indexOf(whereKey):headers.indexOf('id');
@@ -882,7 +908,7 @@ function nestedCreate(model,parentId,data){
   var relFields=RELATIONS[model]||{};
   Object.keys(data||{}).forEach(function(field){ if(!(field in relFields)) return; var cfg=data[field]; var child=relationModel(model,field); if(!child) return; var creates=cfg&&cfg.create ? (Array.isArray(cfg.create)?cfg.create:[cfg.create]) : []; creates.forEach(function(c){ var rel=relFields[field]; var obj=normalizeCreateData(child,c); obj[rel[1]]=parentId; writeRow(child,obj,'create'); }); });
 }
-function normalizeCreateData(model,data){ var obj=clone(data||{}); delete obj.id; Object.keys(obj).forEach(function(k){if(k==='variants'||k==='items'||k==='returns'||k==='payments'||k==='customerPayments'||k==='supplierPayments') delete obj[k];}); var defaults=modelDefaults(model); Object.keys(defaults).forEach(function(k){if(obj[k]===undefined){if(k==='id')obj[k]=randomId(); else if(k==='createdAt'||k==='updatedAt'||k==='date'||k==='openedAt'&&obj[k]===undefined)obj[k]=nowIso(); else obj[k]=defaults[k];}}); obj.id=obj.id||randomId(); if(obj.createdAt==='')obj.createdAt=nowIso(); if('updatedAt' in obj&&obj.updatedAt==='')obj.updatedAt=nowIso(); return obj; }
+function normalizeCreateData(model,data){ var obj=clone(data||{}); delete obj.id; Object.keys(obj).forEach(function(k){if(k==='variants'||k==='items'||k==='returns'||k==='payments'||k==='customerPayments'||k==='supplierPayments') delete obj[k];}); var defaults=modelDefaults(model); Object.keys(defaults).forEach(function(k){if(obj[k]===undefined){if(k==='id')obj[k]=randomId(); else if(k==='createdAt'||k==='updatedAt'||k==='date'||k==='openedAt')obj[k]=nowIso(); else obj[k]=defaults[k];}}); if(obj.createdAt===null||obj.createdAt==='')obj.createdAt=nowIso(); if('updatedAt' in obj&&(obj.updatedAt===null||obj.updatedAt===''))obj.updatedAt=nowIso(); if('date' in obj&&(obj.date===null||obj.date===''))obj.date=nowIso(); if('openedAt' in obj&&(obj.openedAt===null||obj.openedAt===''))obj.openedAt=nowIso(); obj.id=obj.id||randomId(); return obj; }
 function arithmeticValue(old, op){ if(op && typeof op==='object'){ if(op.increment!==undefined)return Number(old||0)+Number(op.increment); if(op.decrement!==undefined)return Number(old||0)-Number(op.decrement); if(op.multiply!==undefined)return Number(old||0)*Number(op.multiply); } return op; }
 function executeQuery(q){
   var model=q.model, method=q.method, args=q.args||{}, rows=getRows(model);
