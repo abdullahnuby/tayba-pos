@@ -5,6 +5,8 @@ import {
   hashPassword,
   validatePasswordPolicy,
   flagMustChangePassword,
+  hashPin,
+  validatePinPolicy,
 } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 
@@ -59,6 +61,14 @@ export async function PATCH(
       }
       data.passwordHash = hashPassword(body.password)
       passwordReset = true
+    }
+
+    if (typeof body.pin === 'string' && body.pin.length > 0) {
+      const pinPolicy = validatePinPolicy(body.pin)
+      if (!pinPolicy.ok) {
+        return NextResponse.json({ error: pinPolicy.error }, { status: 400 })
+      }
+      data.pinHash = hashPin(body.pin)
     }
 
     if (Object.keys(data).length === 0) {
