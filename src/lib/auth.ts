@@ -144,6 +144,35 @@ export function verifyPassword(
 }
 
 // -----------------------------------------------------
+// Register (shift) PIN
+// -----------------------------------------------------
+// A short numeric PIN each cashier sets for themselves, used only to
+// open/close their register shift — separate from their login password.
+// Hashed with the same PBKDF2 scheme as the password.
+
+export const hashPin = hashPassword
+export const verifyPin = verifyPassword
+
+/**
+ * PIN policy: 2 to 6 digits, numeric only.
+ */
+export function validatePinPolicy(
+  pin: string
+): {
+  ok: boolean
+  error?: string
+} {
+  if (!pin || !/^[0-9]{2,6}$/.test(pin)) {
+    return {
+      ok: false,
+      error: 'الرقم السري يجب أن يكون من 2 إلى 6 أرقام',
+    }
+  }
+  return { ok: true }
+}
+
+
+// -----------------------------------------------------
 // Password policy
 // -----------------------------------------------------
 
