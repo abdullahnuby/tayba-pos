@@ -1,4 +1,5 @@
 import { cacheGet, cachePut, cacheDelete } from '@/lib/cloudflare/cache'
+import { getSetting } from '@/lib/settings'
 
 export type SheetRow = Record<string, unknown>
 export type SheetsRequest = {
@@ -34,15 +35,18 @@ async function getConfig() {
     // Local/Node fallback.
   }
 
-  const url =
+  const envUrl =
     String(runtime.GOOGLE_APPS_SCRIPT_URL ?? '') ||
     process.env.GOOGLE_APPS_SCRIPT_URL ||
     ''
 
-  const token =
+  const envToken =
     String(runtime.GOOGLE_APPS_SCRIPT_TOKEN ?? '') ||
     process.env.GOOGLE_APPS_SCRIPT_TOKEN ||
     ''
+
+  const url = envUrl || (await getSetting('appsScriptUrl')) || ''
+  const token = envToken || (await getSetting('appsScriptToken')) || ''
 
   if (!url) throw new Error('GOOGLE_APPS_SCRIPT_URL is not configured')
   if (!token) throw new Error('GOOGLE_APPS_SCRIPT_TOKEN is not configured')

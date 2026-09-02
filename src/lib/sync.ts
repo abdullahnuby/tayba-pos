@@ -52,7 +52,9 @@ export async function getSyncConfig(): Promise<SyncConfig> {
 }
 
 export async function isGoogleConfigured(): Promise<boolean> {
-  return (await getSyncConfig()).method === 'apps_script'
+  const config = await getSyncConfig()
+  const token = process.env.GOOGLE_APPS_SCRIPT_TOKEN || await getSetting('appsScriptToken')
+  return config.method === 'apps_script' && Boolean(token)
 }
 
 /**
