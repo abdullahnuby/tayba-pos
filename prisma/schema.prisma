@@ -18,6 +18,7 @@ datasource db {
 // ------------------------------------------------------------
 // Authentication & Authorization
 // ------------------------------------------------------------
+
 model User {
   id           String   @id @default(cuid())
   username     String   @unique
@@ -26,7 +27,7 @@ model User {
   role         String   @default("cashier") // 'admin' | 'manager' | 'cashier'
   active       Boolean  @default(true)
   createdAt    DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  updatedAt    DateTime @updatedAt
 
   registerSessions RegisterSession[]
   auditLogs        AuditLog[]
@@ -37,6 +38,7 @@ model User {
 // ------------------------------------------------------------
 // Catalog: Category → Product (parent) → Variant (size × color)
 // ------------------------------------------------------------
+
 model Category {
   id        String    @id @default(cuid())
   name      String    @unique
@@ -65,7 +67,7 @@ model Product {
   createdAt   DateTime        @default(now())
   updatedAt   DateTime        @updatedAt
 
-  variants          ProductVariant[]
+  variants ProductVariant[]
 
   @@index([categoryId])
   @@index([brandId])
@@ -73,77 +75,79 @@ model Product {
 }
 
 model ProductVariant {
-  id          String   @id @default(cuid())
-  productId   String
-  product     Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
-  sku         String   @unique
-  barcode     String?  @unique
-  size        String?
-  color       String?
-  material    String?
-  costPrice   Float    @default(0) // moving weighted average cost
-  sellPrice   Float    @default(0)
-  quantity    Int      @default(0)
-  minQuantity Int      @default(5)
-  reorderQty  Int      @default(10)
-  baseUnit    String   @default("piece")
-  purchaseUnit String  @default("piece")
-  purchaseUnitFactor Int @default(1)
-  saleUnit    String   @default("piece")
-  saleUnitFactor Int   @default(1)
-  quarterDozenPrice Float?
-  halfDozenPrice Float?
-  dozenPrice     Float?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id                 String   @id @default(cuid())
+  productId          String
+  product            Product  @relation(fields: [productId], references: [id], onDelete: Cascade)
+  sku                String   @unique
+  barcode            String?  @unique
+  size               String?
+  color              String?
+  material           String?
+  costPrice          Float    @default(0)
+  sellPrice          Float    @default(0)
+  quantity           Int      @default(0)
+  minQuantity        Int      @default(5)
+  reorderQty         Int      @default(10)
+  baseUnit           String   @default("piece")
+  purchaseUnit       String   @default("piece")
+  purchaseUnitFactor Int      @default(1)
+  saleUnit            String   @default("piece")
+  saleUnitFactor      Int      @default(1)
+  quarterDozenPrice  Float?
+  halfDozenPrice     Float?
+  dozenPrice         Float?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
 
-  purchaseItems      PurchaseItem[]
-  saleItems          SaleItem[]
-  saleReturnItems    SaleReturnItem[]
+  purchaseItems       PurchaseItem[]
+  saleItems           SaleItem[]
+  saleReturnItems     SaleReturnItem[]
   purchaseReturnItems PurchaseReturnItem[]
-  stockAdjustments   StockAdjustment[]
+  stockAdjustments    StockAdjustment[]
 
   @@index([productId])
-  @@index([quantity, minQuantity]) // low stock alert query
+  @@index([quantity, minQuantity])
 }
 
 // ------------------------------------------------------------
 // Suppliers & Customers — with balances
 // ------------------------------------------------------------
+
 model Supplier {
   id        String   @id @default(cuid())
   name      String
   phone     String?
   address   String?
   notes     String?
-  balance   Float    @default(0) // positive = we owe them
+  balance   Float    @default(0)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  purchases        Purchase[]
-  payments         SupplierPayment[]
-  purchaseReturns  PurchaseReturn[]
+  purchases       Purchase[]
+  payments        SupplierPayment[]
+  purchaseReturns PurchaseReturn[]
 }
 
 model Customer {
-  id        String   @id @default(cuid())
-  name      String
-  phone     String?
-  address   String?
-  notes     String?
-  balance   Float    @default(0) // positive = they owe us
-  loyaltyPoints Int @default(0)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  id            String   @id @default(cuid())
+  name          String
+  phone         String?
+  address       String?
+  notes         String?
+  balance       Float    @default(0)
+  loyaltyPoints Int      @default(0)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
 
-  sales           Sale[]
-  payments        CustomerPayment[]
-  saleReturns     SaleReturn[]
+  sales       Sale[]
+  payments    CustomerPayment[]
+  saleReturns SaleReturn[]
 }
 
 // ------------------------------------------------------------
 // Purchases — invoice + line items
 // ------------------------------------------------------------
+
 model Purchase {
   id         String   @id @default(cuid())
   invoiceNo  String   @unique
@@ -156,12 +160,12 @@ model Purchase {
   taxAmount  Float    @default(0)
   total      Float    @default(0)
   paid       Float    @default(0)
-  status     String   @default("completed") // 'draft' | 'completed' | 'voided'
+  status     String   @default("completed")
   notes      String?
   createdAt  DateTime @default(now())
 
-  items         PurchaseItem[]
-  returns       PurchaseReturn[]
+  items            PurchaseItem[]
+  returns          PurchaseReturn[]
   supplierPayments SupplierPayment[]
 
   @@index([supplierId, date])
@@ -170,17 +174,17 @@ model Purchase {
 }
 
 model PurchaseItem {
-  id         String         @id @default(cuid())
-  purchaseId String
-  purchase   Purchase        @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
-  variantId  String
-  variant    ProductVariant  @relation(fields: [variantId], references: [id])
-  quantity   Int
-  unitCost   Float
-  total      Float
+  id              String        @id @default(cuid())
+  purchaseId      String
+  purchase        Purchase      @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  variantId       String
+  variant         ProductVariant @relation(fields: [variantId], references: [id])
+  quantity        Int
+  unitCost        Float
+  total           Float
   enteredQuantity Float?
-  unit       String?
-  unitFactor Int?
+  unit            String?
+  unitFactor      Int?
 
   @@index([purchaseId])
   @@index([variantId])
@@ -200,16 +204,16 @@ model PurchaseReturn {
   status     String   @default("completed")
   createdAt  DateTime @default(now())
 
-  items      PurchaseReturnItem[]
+  items            PurchaseReturnItem[]
   supplierPayments SupplierPayment[]
 }
 
 model PurchaseReturnItem {
-  id              String            @id @default(cuid())
+  id              String         @id @default(cuid())
   purchaseReturnId String
-  purchaseReturn  PurchaseReturn    @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
+  purchaseReturn  PurchaseReturn @relation(fields: [purchaseReturnId], references: [id], onDelete: Cascade)
   variantId       String
-  variant         ProductVariant    @relation(fields: [variantId], references: [id])
+  variant         ProductVariant @relation(fields: [variantId], references: [id])
   quantity        Int
   unitCost        Float
   total           Float
@@ -218,29 +222,30 @@ model PurchaseReturnItem {
 // ------------------------------------------------------------
 // Sales — invoice + line items (with snapshot cost)
 // ------------------------------------------------------------
+
 model Sale {
-  id            String     @id @default(cuid())
-  invoiceNo     String     @unique
+  id            String    @id @default(cuid())
+  invoiceNo     String    @unique
   customerId    String?
-  customer      Customer?  @relation(fields: [customerId], references: [id])
+  customer      Customer? @relation(fields: [customerId], references: [id])
   userId        String?
-  user          User?      @relation(fields: [userId], references: [id])
-  date          DateTime   @default(now())
-  subtotal      Float      @default(0)
-  discount      Float      @default(0)
-  taxRate       Float      @default(0)
-  taxAmount     Float      @default(0)
-  total         Float      @default(0)
-  paid          Float      @default(0)
-  change        Float      @default(0)
-  paymentMethod String     @default("cash")
-  status        String     @default("completed") // 'draft' (held) | 'completed' | 'voided' | 'returned' | 'partial_return'
+  user          User?     @relation(fields: [userId], references: [id])
+  date          DateTime  @default(now())
+  subtotal      Float     @default(0)
+  discount      Float     @default(0)
+  taxRate       Float     @default(0)
+  taxAmount     Float     @default(0)
+  total         Float     @default(0)
+  paid          Float     @default(0)
+  change        Float     @default(0)
+  paymentMethod String    @default("cash")
+  status        String    @default("completed")
   voidReason    String?
   notes         String?
-  createdAt     DateTime   @default(now())
+  createdAt     DateTime  @default(now())
 
-  items         SaleItem[]
-  returns       SaleReturn[]
+  items            SaleItem[]
+  returns          SaleReturn[]
   customerPayments CustomerPayment[]
 
   @@index([date, status])
@@ -251,14 +256,14 @@ model Sale {
 }
 
 model SaleItem {
-  id         String        @id @default(cuid())
+  id         String         @id @default(cuid())
   saleId     String
-  sale       Sale          @relation(fields: [saleId], references: [id], onDelete: Cascade)
+  sale       Sale           @relation(fields: [saleId], references: [id], onDelete: Cascade)
   variantId  String
   variant    ProductVariant @relation(fields: [variantId], references: [id])
   quantity   Int
   unitPrice  Float
-  unitCost   Float    // SNAPSHOT cost at sale time (for accurate historical profit)
+  unitCost   Float
   total      Float
   returnItems SaleReturnItem[]
 
@@ -278,10 +283,10 @@ model SaleReturn {
   total      Float    @default(0)
   reason     String?
   notes      String?
-  status     String   @default("completed") // 'draft' | 'completed' | 'voided'
+  status     String   @default("completed")
   createdAt  DateTime @default(now())
 
-  items      SaleReturnItem[]
+  items            SaleReturnItem[]
   customerPayments CustomerPayment[]
 
   @@index([saleId])
@@ -290,34 +295,35 @@ model SaleReturn {
 }
 
 model SaleReturnItem {
-  id        String         @id @default(cuid())
+  id           String         @id @default(cuid())
   saleReturnId String
-  saleReturn SaleReturn    @relation(fields: [saleReturnId], references: [id], onDelete: Cascade)
-  saleItemId String
-  saleItem  SaleItem       @relation(fields: [saleItemId], references: [id])
-  variantId String
-  variant   ProductVariant  @relation(fields: [variantId], references: [id])
-  quantity  Int
-  unitPrice Float
-  total     Float
+  saleReturn   SaleReturn     @relation(fields: [saleReturnId], references: [id], onDelete: Cascade)
+  saleItemId   String
+  saleItem     SaleItem       @relation(fields: [saleItemId], references: [id])
+  variantId    String
+  variant      ProductVariant @relation(fields: [variantId], references: [id])
+  quantity     Int
+  unitPrice    Float
+  total        Float
 }
 
 // ------------------------------------------------------------
 // Payments (customer & supplier)
 // ------------------------------------------------------------
+
 model CustomerPayment {
-  id         String   @id @default(cuid())
-  customerId String
-  customer   Customer @relation(fields: [customerId], references: [id])
-  saleId     String?
-  sale       Sale?    @relation(fields: [saleId], references: [id])
+  id           String      @id @default(cuid())
+  customerId   String
+  customer     Customer    @relation(fields: [customerId], references: [id])
+  saleId       String?
+  sale         Sale?       @relation(fields: [saleId], references: [id])
   saleReturnId String?
-  saleReturn SaleReturn? @relation(fields: [saleReturnId], references: [id])
-  amount     Float
-  method     String   @default("cash") // 'cash' | 'card' | 'transfer'
-  date       DateTime @default(now())
-  notes      String?
-  createdAt  DateTime @default(now())
+  saleReturn   SaleReturn? @relation(fields: [saleReturnId], references: [id])
+  amount       Float
+  method       String      @default("cash")
+  date         DateTime    @default(now())
+  notes        String?
+  createdAt    DateTime    @default(now())
 
   @@index([customerId, date])
   @@index([saleId])
@@ -325,18 +331,18 @@ model CustomerPayment {
 }
 
 model SupplierPayment {
-  id         String   @id @default(cuid())
-  supplierId String
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
-  purchaseId String?
-  purchase   Purchase? @relation(fields: [purchaseId], references: [id])
+  id              String         @id @default(cuid())
+  supplierId      String
+  supplier        Supplier       @relation(fields: [supplierId], references: [id])
+  purchaseId      String?
+  purchase        Purchase?      @relation(fields: [purchaseId], references: [id])
   purchaseReturnId String?
-  purchaseReturn PurchaseReturn? @relation(fields: [purchaseReturnId], references: [id])
-  amount     Float
-  method     String   @default("cash")
-  date       DateTime @default(now())
-  notes      String?
-  createdAt  DateTime @default(now())
+  purchaseReturn  PurchaseReturn? @relation(fields: [purchaseReturnId], references: [id])
+  amount          Float
+  method          String         @default("cash")
+  date            DateTime       @default(now())
+  notes           String?
+  createdAt       DateTime       @default(now())
 
   @@index([supplierId, date])
   @@index([purchaseId])
@@ -346,41 +352,43 @@ model SupplierPayment {
 // ------------------------------------------------------------
 // Register sessions (cash drawer shifts)
 // ------------------------------------------------------------
+
 model RegisterSession {
-  id              String   @id @default(cuid())
-  userId          String
-  user            User     @relation(fields: [userId], references: [id])
-  openedAt        DateTime @default(now())
-  closedAt        DateTime?
-  openingFloat    Float    @default(0)
-  closingFloat    Float?
-  expectedCash    Float?
-  difference      Float?
-  cashSales       Float    @default(0)
-  cardSales       Float    @default(0)
-  transferSales   Float    @default(0)
-  notes           String?
-  status          String   @default("open") // 'open' | 'closed'
+  id            String   @id @default(cuid())
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  openedAt      DateTime @default(now())
+  closedAt      DateTime?
+  openingFloat  Float    @default(0)
+  closingFloat  Float?
+  expectedCash  Float?
+  difference    Float?
+  cashSales     Float    @default(0)
+  cardSales     Float    @default(0)
+  transferSales Float    @default(0)
+  notes         String?
+  status        String   @default("open")
 
   @@index([userId, status])
   @@index([status, openedAt])
 }
 
 // ------------------------------------------------------------
-// Stock Adjustments (damage, theft, stocktake, sample, transfer)
+// Stock Adjustments
 // ------------------------------------------------------------
+
 model StockAdjustment {
-  id         String          @id @default(cuid())
-  variantId  String
-  variant    ProductVariant  @relation(fields: [variantId], references: [id])
-  productId  String?
-  userId     String?
-  user       User?           @relation(fields: [userId], references: [id])
-  type        String          // 'damage' | 'theft' | 'stocktake' | 'sample' | 'transfer_in' | 'transfer_out' | 'adjustment'
-  quantityChange Int         // negative or positive
-  reason      String?
-  notes       String?
-  createdAt   DateTime        @default(now())
+  id             String         @id @default(cuid())
+  variantId      String
+  variant        ProductVariant @relation(fields: [variantId], references: [id])
+  productId      String?
+  userId         String?
+  user           User?          @relation(fields: [userId], references: [id])
+  type           String
+  quantityChange Int
+  reason         String?
+  notes          String?
+  createdAt      DateTime       @default(now())
 
   @@index([variantId, createdAt])
   @@index([userId, createdAt])
@@ -390,15 +398,16 @@ model StockAdjustment {
 // ------------------------------------------------------------
 // Audit Log
 // ------------------------------------------------------------
+
 model AuditLog {
   id        String   @id @default(cuid())
   userId    String?
   user      User?    @relation(fields: [userId], references: [id])
-  action    String   // 'create' | 'update' | 'delete' | 'void' | 'return' | 'payment'
-  entity    String   // 'sale' | 'purchase' | 'product' | 'customer' ...
+  action    String
+  entity    String
   entityId  String?
-  before    String?  // JSON
-  after     String?  // JSON
+  before    String?
+  after     String?
   ip        String?
   createdAt DateTime @default(now())
 
@@ -411,6 +420,7 @@ model AuditLog {
 // ------------------------------------------------------------
 // App Settings (key-value)
 // ------------------------------------------------------------
+
 model Setting {
   id    String @id @default(cuid())
   key   String @unique
