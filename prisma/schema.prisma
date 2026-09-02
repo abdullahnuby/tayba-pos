@@ -25,6 +25,7 @@ model User {
   id           String   @id @default(cuid())
   username     String   @unique
   passwordHash String
+  pinHash      String?
   name         String
   role         String   @default("cashier") // 'admin' | 'manager' | 'cashier'
   active       Boolean  @default(true)
@@ -35,7 +36,7 @@ model User {
   auditLogs        AuditLog[]
   stockAdjustments StockAdjustment[]
   sales            Sale[]
-}
+
 
 // ------------------------------------------------------------
 // Catalog: Category → Product (parent) → Variant (size × color)
