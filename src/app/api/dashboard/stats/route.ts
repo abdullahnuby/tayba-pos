@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getD1Binding } from '@/lib/d1-atomic'
 import { getCurrentUser } from '@/lib/auth'
 
 export async function GET() {
@@ -10,13 +11,11 @@ export async function GET() {
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
   const endOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999)
 
-  // Today's sales (only completed)
   const todaySalesAgg = await db.sale.aggregate({
     where: { date: { gte: startOfToday, lte: endOfToday }, status: 'completed' },
     _sum: { total: true },
   })
 
-  // Today's profit using SaleItem.unitCost snapshot (accurate)
   const todaySaleItems = await db.saleItem.findMany({
     where: { sale: { date: { gte: startOfToday, lte: endOfToday }, status: 'completed' } },
     select: { unitPrice: true, unitCost: true, quantity: true },
@@ -26,34 +25,35 @@ export async function GET() {
     todayProfit += (it.unitPrice - it.unitCost) * it.quantity
   }
 
-  // Today's sale count and items sold
   const todaySalesCount = await db.sale.count({
     where: { date: { gte: startOfToday, lte: endOfToday }, status: 'completed' },
   })
 
-  // Low stock count (variants <= minQuantity)
-  const lowStockCount = await db.productVariant.count({
-    where: { quantity: { lte: db.productVariant.fields.minQuantity } },
-  })
+  // Prisma cannot express quantity <= minQuantity/reorderQty here.
+  // D1 SQL compares the two columns directly.
+  const d1 = getD1Binding()
+  if (!d1) throw new Error('لا يوجد اتصال Cloudflare D1')
 
-  // Out of stock count
+  const lowStockCountResult = await d1
+    .prepare('SELECT COUNT(*) AS count FROM "ProductVariant" WHERE quantity <= minQuantity')
+    .all<{ count: number }>()
+  const lowStockCount = Number(lowStockCountResult.results?.[0]?.count ?? 0)
+
   const outOfStockCount = await db.productVariant.count({ where: { quantity: 0 } })
 
-  // Inventory value (using current MWA costPrice)
   const variants = await db.productVariant.findMany({
     select: { costPrice: true, sellPrice: true, quantity: true },
   })
   const inventoryValue = variants.reduce((s, v) => s + v.costPrice * v.quantity, 0)
   const retailValue = variants.reduce((s, v) => s + v.sellPrice * v.quantity, 0)
 
-  // Outstanding balances
   const customerBalances = await db.customer.aggregate({ _sum: { balance: true } })
   const supplierBalances = await db.supplier.aggregate({ _sum: { balance: true } })
 
-  // 7-day sales+profit trend
   const sevenDaysAgo = new Date(now)
   sevenDaysAgo.setDate(now.getDate() - 6)
   sevenDaysAgo.setHours(0, 0, 0, 0)
+
   const recentSales = await db.sale.findMany({
     where: { date: { gte: sevenDaysAgo }, status: 'completed' },
     select: { date: true, total: true },
@@ -62,6 +62,7 @@ export async function GET() {
     where: { sale: { date: { gte: sevenDaysAgo }, status: 'completed' } },
     select: { unitPrice: true, unitCost: true, quantity: true, sale: { select: { date: true } } },
   })
+
   const trendMap = new Map<string, { sales: number; profit: number }>()
   for (let i = 0; i < 7; i++) {
     const d = new Date(sevenDaysAgo)
@@ -75,10 +76,9 @@ export async function GET() {
   }
   for (const it of recentItems) {
     const key = it.sale.date.toISOString().slice(0, 10)
-    if (trendMap.has(key)) {
-      trendMap.get(key)!.profit += (it.unitPrice - it.unitCost) * it.quantity
-    }
+    if (trendMap.has(key)) trendMap.get(key)!.profit += (it.unitPrice - it.unitCost) * it.quantity
   }
+
   const salesTrend = Array.from(trendMap.entries()).map(([date, v]) => ({
     date,
     label: new Date(date).toLocaleDateString('ar-EG', { weekday: 'short', day: 'numeric' }),
@@ -86,7 +86,6 @@ export async function GET() {
     profit: Math.round(v.profit),
   }))
 
-  // Top 5 selling products (by qty) — use variants with product include
   const allSaleItems = await db.saleItem.findMany({
     where: { sale: { status: 'completed' } },
     select: { variantId: true, quantity: true, total: true, unitPrice: true, unitCost: true },
@@ -99,7 +98,11 @@ export async function GET() {
     cur.profit += (it.unitPrice - it.unitCost) * it.quantity
     prodMap.set(it.variantId, cur)
   }
-  const topVariantIds = Array.from(prodMap.entries()).sort((a, b) => b[1].qty - a[1].qty).slice(0, 5)
+
+  const topVariantIds = Array.from(prodMap.entries())
+    .sort((a, b) => b[1].qty - a[1].qty)
+    .slice(0, 5)
+
   const topVariants = await Promise.all(
     topVariantIds.map(async ([vid, v]) => {
       const variant = await db.productVariant.findUnique({
@@ -118,7 +121,6 @@ export async function GET() {
     })
   )
 
-  // Recent sales
   const recentSaleList = await db.sale.findMany({
     take: 5,
     where: { status: { in: ['completed', 'partial_return'] } },
@@ -126,21 +128,33 @@ export async function GET() {
     include: { customer: true, items: true },
   })
 
-  // Low stock list
-  const lowStockList = await db.productVariant.findMany({
-    where: { quantity: { lte: db.productVariant.fields.minQuantity } },
-    include: { product: { include: { category: true } } },
-    take: 20,
-  })
+  const lowStockListResult = await d1
+    .prepare(`
+      SELECT pv.id, p.name AS name, pv.sku, pv.size, pv.color,
+             pv.quantity, pv.minQuantity, pv.reorderQty,
+             c.name AS category
+      FROM "ProductVariant" pv
+      JOIN "Product" p ON p.id = pv.productId
+      LEFT JOIN "Category" c ON c.id = p.categoryId
+      WHERE pv.quantity <= pv.minQuantity
+      ORDER BY pv.quantity ASC, p.name ASC
+      LIMIT 20
+    `)
+    .all<any>()
+  const lowStockList = lowStockListResult.results || []
 
-  // Reorder suggestions (variants below reorder point)
-  const reorderList = await db.productVariant.findMany({
-    where: { quantity: { lte: db.productVariant.fields.reorderQty } },
-    include: { product: { select: { name: true } } },
-    take: 10,
-  })
+  const reorderListResult = await d1
+    .prepare(`
+      SELECT pv.id, p.name AS name, pv.sku, pv.quantity, pv.reorderQty
+      FROM "ProductVariant" pv
+      JOIN "Product" p ON p.id = pv.productId
+      WHERE pv.quantity <= pv.reorderQty
+      ORDER BY pv.quantity ASC, p.name ASC
+      LIMIT 10
+    `)
+    .all<any>()
+  const reorderList = reorderListResult.results || []
 
-  // Today's profit by payment method
   const todaySalesByMethod = await db.sale.findMany({
     where: { date: { gte: startOfToday, lte: endOfToday }, status: 'completed' },
     select: { paymentMethod: true, total: true },
@@ -175,24 +189,24 @@ export async function GET() {
       paymentMethod: s.paymentMethod,
       status: s.status,
     })),
-    lowStockList: lowStockList.map((v) => ({
+    lowStockList: lowStockList.map((v: any) => ({
       id: v.id,
-      name: v.product.name,
+      name: v.name,
       sku: v.sku,
       size: v.size || '',
       color: v.color || '',
-      quantity: v.quantity,
-      minQuantity: v.minQuantity,
-      reorderQty: v.reorderQty,
-      category: v.product.category?.name,
+      quantity: Number(v.quantity),
+      minQuantity: Number(v.minQuantity),
+      reorderQty: Number(v.reorderQty),
+      category: v.category || undefined,
     })),
-    reorderList: reorderList.map((v) => ({
+    reorderList: reorderList.map((v: any) => ({
       id: v.id,
-      name: v.product.name,
+      name: v.name,
       sku: v.sku,
-      quantity: v.quantity,
-      reorderQty: v.reorderQty,
-      suggestedOrder: Math.max(0, v.reorderQty * 2 - v.quantity),
+      quantity: Number(v.quantity),
+      reorderQty: Number(v.reorderQty),
+      suggestedOrder: Math.max(0, Number(v.reorderQty) * 2 - Number(v.quantity)),
     })),
     todayByMethod: byMethod,
   })
