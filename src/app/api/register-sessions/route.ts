@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { z } from 'zod'
-import { getCurrentUser, verifyPassword } from '@/lib/auth'
+import { getCurrentUser, verifyPin } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 
-const openSchema = z.object({ openingFloat: z.number().min(0), password: z.string().min(1), notes: z.string().optional().nullable() })
-const closeSchema = z.object({ sessionId: z.string().min(1), closingFloat: z.number().min(0), password: z.string().min(1), notes: z.string().optional().nullable() })
+const pinField = z.string().regex(/^[0-9]{2,6}$/, 'الرقم السري غير صحيح')
+const openSchema = z.object({ openingFloat: z.number().min(0), pin: pinField, notes: z.string().optional().nullable() })
+const closeSchema = z.object({ sessionId: z.string().min(1), closingFloat: z.number().min(0), pin: pinField, notes: z.string().optional().nullable() })
 
 async function verifyUserPassword(userId: string, password: string) {
   const row = await db.user.findUnique({ where: { id: userId }, select: { passwordHash: true } })
