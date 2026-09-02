@@ -36,7 +36,7 @@ model User {
   auditLogs        AuditLog[]
   stockAdjustments StockAdjustment[]
   sales            Sale[]
-
+}
 
 // ------------------------------------------------------------
 // Catalog: Category → Product (parent) → Variant (size × color)
