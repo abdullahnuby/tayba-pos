@@ -68,9 +68,6 @@ export function LoginSection({ onLogin }: LoginProps) {
             <CardDescription className="text-base mt-1">
               نظام إدارة المحلات — سجل دخولك للمتابعة
             </CardDescription>
-            <p className="text-xs text-muted-foreground mt-3 bg-muted/60 rounded-lg px-3 py-2 leading-relaxed">
-              أول دخول للنظام؟ استخدم <span dir="ltr" className="font-mono">admin / admin123</span> — هيتولد تلقائي على الشيت، وهيطلب منك تغيّر كلمة السر فورًا.
-            </p>
           </CardHeader>
           <CardContent className="pb-8">
             <form onSubmit={submit} className="space-y-4">
@@ -82,7 +79,7 @@ export function LoginSection({ onLogin }: LoginProps) {
                     id="login-username"
                     value={username}
                     onChange={(e) => setUsername(e.target.value)}
-                    placeholder="admin"
+                    placeholder="اسم المستخدم"
                     className="pr-9 h-11"
                     autoComplete="username"
                   />
@@ -110,14 +107,6 @@ export function LoginSection({ onLogin }: LoginProps) {
                   'تسجيل الدخول'
                 )}
               </Button>
-              <div className="rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">
-                <p className="font-medium text-foreground mb-1.5">حسابات تجريبية:</p>
-                <div className="space-y-0.5 font-mono" dir="ltr">
-                  <p>admin / Admin@12345</p>
-                  <p>manager / Manager@12345</p>
-                  <p>cashier / Cashier@123</p>
-                </div>
-              </div>
             </form>
           </CardContent>
         </Card>
