@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { verifyPassword, createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE, ensureSeedAdmin } from '@/lib/auth'
+import { verifyPassword, createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
@@ -10,7 +10,6 @@ export async function POST(req: NextRequest) {
     const limited = applyRateLimit(req, 'login', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
     if (limited) return limited
 
-    await ensureSeedAdmin()
     const { username, password } = await req.json()
     if (!username || !password) {
       return NextResponse.json({ error: 'اسم المستخدم وكلمة المرور مطلوبان' }, { status: 400 })
