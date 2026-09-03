@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { LoginSection } from '@/components/login-section'
+import { SetupSection } from '@/components/setup-section'
 import { AppShell } from '@/components/app-shell'
 
 interface SessionUser {
@@ -11,7 +12,7 @@ interface SessionUser {
   role: 'admin' | 'manager' | 'cashier'
 }
 
-type AppView = 'loading' | 'login' | 'app'
+type AppView = 'loading' | 'setup' | 'login' | 'app'
 
 export default function Home() {
   const [view, setView] = useState<AppView>('loading')
@@ -19,8 +20,19 @@ export default function Home() {
 
   const checkSession = useCallback(async () => {
     try {
-      // Fixed admin account is auto-created on the Google Sheet on first
-      // login attempt (see ensureSeedAdmin in /api/auth/login) — no setup wizard needed.
+      // First check whether the system has ever been set up at all. If no
+      // user exists yet, the ONLY way to create the first admin is the
+      // setup wizard (which lets the store owner pick their own username
+      // and password) — never an auto-created known-password account.
+      const setupRes = await fetch('/api/auth/setup')
+      if (setupRes.ok) {
+        const setupData = await setupRes.json()
+        if (setupData.needsSetup) {
+          setView('setup')
+          return
+        }
+      }
+
       const res = await fetch('/api/auth/me')
       if (res.ok) {
         const data = await res.json()
@@ -48,6 +60,10 @@ export default function Home() {
         <div className="size-8 animate-pulse rounded-full bg-primary/30" />
       </div>
     )
+  }
+
+  if (view === 'setup') {
+    return <SetupSection onSetupComplete={checkSession} />
   }
 
   if (view === 'login' || !user) {
