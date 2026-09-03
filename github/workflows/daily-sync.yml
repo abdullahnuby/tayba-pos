@@ -1,0 +1,21 @@
+name: Daily Google Sheets sync
+
+on:
+  schedule:
+    # 23:00 UTC = 2:00 AM Cairo time (Egypt is UTC+3 during daylight saving,
+    # roughly April–October, and UTC+2 the rest of the year — so this runs
+    # at ~2 AM in summer and ~1 AM in winter. Close enough for a nightly job;
+    # adjust the hour below if you want it exact for a given season).
+    - cron: '0 23 * * *'
+  workflow_dispatch: {} # lets you also trigger it manually from the Actions tab
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the sync endpoint
+        run: |
+          curl --fail --silent --show-error \
+            -X POST \
+            -H "x-cron-secret: ${{ secrets.CRON_SECRET }}" \
+            https://pos.abdullah-elmassry.workers.dev/api/sync/cron
