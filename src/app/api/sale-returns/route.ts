@@ -24,7 +24,6 @@ export async function POST(req: NextRequest) {
     const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
     const result = await atomicAction('commit_sale_return', { payload: { saleId: data.saleId, userId: user.id, idempotencyKey, reason: data.reason || null, notes: data.notes || null, refundMethod: data.refundMethod, items: data.items } })
     await auditLog({ user, action: 'return', entity: 'sale', entityId: data.saleId, after: { returnNo: (result as any).returnNo, total: (result as any).total, refundMethod: data.refundMethod } })
-    try { const { syncAfterReturn } = await import('@/lib/sync'); await syncAfterReturn((result as any).customerId || null) } catch {}
     return NextResponse.json(result, { status: 201 })
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'خطأ في تسجيل المرتجع'
