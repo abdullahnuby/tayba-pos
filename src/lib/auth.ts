@@ -72,18 +72,9 @@ export function hashPassword(
       .randomBytes(16)
       .toString('hex')
 
-  const hash =
-    crypto
-      .pbkdf2Sync(
-        pw,
-        salt,
-        1000,
-        64,
-        'sha512'
-      )
-      .toString('hex')
-
-  return `${salt}:${hash}`
+  const iterations = 210_000
+  const hash = crypto.pbkdf2Sync(pw, salt, iterations, 64, 'sha512').toString('hex')
+  return `${salt}:${iterations}:${hash}`
 }
 
 export function verifyPassword(
@@ -94,26 +85,15 @@ export function verifyPassword(
     return false
   }
 
-  const [
-    salt,
-    hash,
-  ] = stored.split(':')
-
-  if (!salt || !hash) {
-    return false
-  }
+  const parts = stored.split(':')
+  const salt = parts[0]
+  const legacyFormat = parts.length === 2
+  const iterations = legacyFormat ? 1_000 : Number(parts[1])
+  const hash = legacyFormat ? parts[1] : parts[2]
+  if (!salt || !hash || !Number.isSafeInteger(iterations) || iterations < 1_000 || iterations > 1_000_000) return false
 
   try {
-    const verify =
-      crypto
-        .pbkdf2Sync(
-          pw,
-          salt,
-          1000,
-          64,
-          'sha512'
-        )
-        .toString('hex')
+    const verify = crypto.pbkdf2Sync(pw, salt, iterations, 64, 'sha512').toString('hex')
 
     const storedBuffer =
       Buffer.from(
@@ -152,16 +132,21 @@ export function verifyPassword(
 
 export function hashPin(pin: string): string {
   const salt = crypto.randomBytes(16).toString('hex')
-  const hash = crypto.pbkdf2Sync(pin, salt, 1000, 64, 'sha512').toString('hex')
-  return `${salt}:${hash}`
+  const iterations = 100_000
+  const hash = crypto.pbkdf2Sync(pin, salt, iterations, 64, 'sha512').toString('hex')
+  return `${salt}:${iterations}:${hash}`
 }
 
 export function verifyPin(pin: string, stored: string): boolean {
   if (!pin || !stored) return false
-  const [salt, hash] = stored.split(':')
-  if (!salt || !hash) return false
+  const parts = stored.split(':')
+  const salt = parts[0]
+  const legacyFormat = parts.length === 2
+  const iterations = legacyFormat ? 1_000 : Number(parts[1])
+  const hash = legacyFormat ? parts[1] : parts[2]
+  if (!salt || !hash || !Number.isSafeInteger(iterations) || iterations < 1_000 || iterations > 1_000_000) return false
   try {
-    const verify = crypto.pbkdf2Sync(pin, salt, 1000, 64, 'sha512').toString('hex')
+    const verify = crypto.pbkdf2Sync(pin, salt, iterations, 64, 'sha512').toString('hex')
     const storedBuffer = Buffer.from(hash, 'hex')
     const verifyBuffer = Buffer.from(verify, 'hex')
     if (storedBuffer.length !== verifyBuffer.length) return false
@@ -314,21 +299,9 @@ export function verifySessionToken(
   }
 
   try {
-    const expectedSignature =
-      crypto
-        .createHmac(
-          'sha256',
-          getAuthSecret()
-        )
-        .update(body)
-        .digest(
-          'base64url'
-        )
-
-    if (
-      signature !==
-      expectedSignature
-    ) {
+    const expectedSignature = crypto.createHmac('sha256', getAuthSecret()).update(body).digest()
+    const receivedSignature = Buffer.from(signature, 'base64url')
+    if (receivedSignature.length !== expectedSignature.length || !crypto.timingSafeEqual(receivedSignature, expectedSignature)) {
       return null
     }
 
@@ -414,9 +387,28 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
         SESSION_COOKIE_NAME
       )?.value
 
-    return verifySessionToken(
-      token
-    )
+    const decoded = verifySessionToken(token)
+    if (!decoded) return null
+
+    // Sessions are revalidated against the local database on every request,
+    // so disabling a user or changing their role takes effect immediately.
+    const liveUser = await db.user.findUnique({
+      where: { id: decoded.id },
+      select: { id: true, username: true, name: true, role: true, active: true },
+    })
+    if (!liveUser?.active) return null
+
+    const changeFlag = await db.setting.findUnique({ where: { key: `mustChangePw:${liveUser.id}` } })
+    const role = ['admin', 'manager', 'cashier'].includes(liveUser.role) ? liveUser.role : null
+    if (!role) return null
+
+    return {
+      id: liveUser.id,
+      username: liveUser.username,
+      name: liveUser.name,
+      role,
+      mustChangePassword: changeFlag?.value === '1',
+    }
   } catch {
     return null
   }
@@ -555,7 +547,7 @@ export async function ensureSeedAdmin(): Promise<void> {
     await flagMustChangePassword(admin.id)
 
     console.log(
-      '✓ Created bootstrap admin on the sheet: admin / admin123 (must change on first login)'
+      '✓ Created bootstrap admin in the local database; change the password at first login.'
     )
   }
 }
