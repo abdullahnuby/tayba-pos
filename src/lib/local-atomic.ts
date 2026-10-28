@@ -500,6 +500,67 @@ export async function localAtomicAction<T = any>(
       }) as Promise<T>
     }
 
+    case 'commit_stock_adjustments': {
+      return database.$transaction(async (tx) => {
+        const items = Array.isArray(input.items) ? input.items : []
+        if (!items.length) throw new Error('لم يتم إرسال أصناف للتعديل')
+        const normalized = items.map((item: AnyRecord) => {
+          const variantId = String(item.variantId || '')
+          const quantityChange = Number(item.quantityChange)
+          if (!variantId || !Number.isSafeInteger(quantityChange) || quantityChange === 0) {
+            throw new Error('بيانات تعديل المخزون غير صحيحة')
+          }
+          return {
+            variantId,
+            quantityChange,
+            userId: input.userId || null,
+            type: item.type || (input.mode === 'opening' ? 'adjustment' : 'stocktake'),
+            reason: item.reason || (input.mode === 'opening' ? 'رصيد افتتاحي' : 'جرد'),
+            notes: item.notes || null,
+          }
+        })
+        const changes = new Map<string, number>()
+        for (const item of normalized) {
+          changes.set(item.variantId, (changes.get(item.variantId) || 0) + item.quantityChange)
+        }
+        const variants = await tx.productVariant.findMany({
+          where: { id: { in: [...changes.keys()] } },
+          select: { id: true, quantity: true, productId: true },
+        })
+        if (variants.length !== changes.size) throw new Error('بعض المنتجات غير موجودة')
+        const variantMap = new Map(variants.map((variant: AnyRecord) => [variant.id, variant]))
+        for (const [variantId, change] of changes) {
+          const variant = variantMap.get(variantId) as AnyRecord
+          if (variant.quantity + change < 0) throw new Error('لا يمكن أن يصبح المخزون بالسالب')
+        }
+        for (const [variantId, change] of changes) {
+          const variant = variantMap.get(variantId) as AnyRecord
+          const updated = await tx.productVariant.updateMany({
+            where: { id: variantId, quantity: { gte: Math.max(0, -change) } },
+            data: { quantity: { increment: change }, updatedAt: new Date() },
+          })
+          if (updated.count !== 1) throw new Error('تغير المخزون أثناء الجرد؛ أعد المحاولة')
+        }
+        const created: AnyRecord[] = []
+        for (const item of normalized) {
+          const variant = variantMap.get(item.variantId) as AnyRecord
+          created.push(await tx.stockAdjustment.create({
+            data: {
+              id: id(),
+              variantId: item.variantId,
+              productId: variant.productId,
+              userId: item.userId,
+              type: item.type,
+              quantityChange: item.quantityChange,
+              reason: item.reason,
+              notes: item.notes,
+            },
+          }))
+        }
+        return created
+      }) as Promise<T>
+    }
+
     case 'void_purchase': {
       return database.$transaction(async (tx) => {
         const purchase = await tx.purchase.findUnique({ where: { id: String(input.purchaseId || '') }, include: { items: true, returns: true, supplierPayments: true } })
