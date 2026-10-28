@@ -6,6 +6,10 @@ on:
       - local-only-hardening
   workflow_dispatch:
 
+concurrency:
+  group: tayba-pos-local-hardening-checks
+  cancel-in-progress: true
+
 jobs:
   validate-and-build:
     runs-on: ubuntu-latest
