@@ -44,6 +44,7 @@ function TouchNumberPad({ value, onChange, onDone }: { value: number; onChange: 
 
 export function PurchasesSection() {
   const qc = useQueryClient()
+  const submissionKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const [search, setSearch] = useState('')
   const [open, setOpen] = useState(false)
   const [viewing, setViewing] = useState<Purchase | null>(null)
@@ -71,7 +72,20 @@ export function PurchasesSection() {
   const total = Math.max(0, subtotal - discount)
   const remaining = Math.max(0, total - paid)
 
-  const createMutation = useMutation({ mutationFn: async (data: any) => { const r = await fetch('/api/purchases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); if (!r.ok) throw new Error((await r.json()).error || 'فشل حفظ الفاتورة'); return r.json() }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['purchases'] }); qc.invalidateQueries({ queryKey: ['products'] }); qc.invalidateQueries({ queryKey: ['suppliers'] }); qc.invalidateQueries({ queryKey: ['dashboard-stats'] }); toast.success('تم تسجيل فاتورة الشراء وتحديث المخزون'); setOpen(false); reset() }, onError: (e: Error) => toast.error(e.message) })
+  const createMutation = useMutation({
+    mutationFn: async (data: Record<string, unknown>) => {
+      const payload = withIdempotencyKey(data, submissionKeyRef)
+      const r = await fetch('/api/purchases', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) })
+      if (!r.ok) throw new Error((await r.json()).error || 'فشل حفظ الفاتورة')
+      return r.json()
+    },
+    onSuccess: () => {
+      clearIdempotencyKey(submissionKeyRef)
+      qc.invalidateQueries({ queryKey: ['purchases'] }); qc.invalidateQueries({ queryKey: ['products'] }); qc.invalidateQueries({ queryKey: ['suppliers'] }); qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
+      toast.success('تم تسجيل فاتورة الشراء وتحديث المخزون'); setOpen(false); reset()
+    },
+    onError: (e: Error) => toast.error(e.message),
+  })
   const voidMutation = useMutation({ mutationFn: async (purchaseId: string) => { const r = await fetch(`/api/purchases/${purchaseId}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action: 'void', voidReason: 'إلغاء من شاشة المشتريات' }) }); if (!r.ok) throw new Error((await r.json()).error || 'فشل إلغاء الفاتورة'); return r.json() }, onSuccess: () => { qc.invalidateQueries({ queryKey: ['purchases'] }); qc.invalidateQueries({ queryKey: ['products'] }); qc.invalidateQueries({ queryKey: ['suppliers'] }); toast.success('تم إلغاء فاتورة الشراء وإرجاع المخزون'); setViewing(null) }, onError: (e: Error) => toast.error(e.message) })
   function reset() { setSupplierId(''); setDiscount(0); setPaid(0); setPaymentMethod('cash'); setNotes(''); setItems([]); setProductFilter(''); setMoneyEditor(null); setEditingLine(null) }
   function add(v: any) { if (items.some(i => i.variantId === v.id)) return toast.info('الصنف موجود بالفعل'); const unit = v.purchaseUnit || 'piece'; const factor = Number(v.purchaseUnitFactor) || 1; setItems([...items, { variantId: v.id, quantity: factor, enteredQuantity: 1, unitCost: (v.costPrice || 0) * factor, unit, unitFactor: factor }]); }
