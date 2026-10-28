@@ -3,7 +3,6 @@ import { db } from '@/lib/db'
 import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
-import { retryOnConflict } from '@/lib/pricing'
 
 const paymentSchema = z.object({
   supplierId: z.string().min(1),
@@ -44,66 +43,53 @@ export async function POST(req: NextRequest) {
     }
     const data = parsed.data
 
-    // BLOCKER #3 fix: prevent overpayment
-    const supplier = await db.supplier.findUnique({
-      where: { id: data.supplierId },
-      select: { balance: true, name: true },
-    })
-    if (!supplier) return NextResponse.json({ error: 'المورد غير موجود' }, { status: 404 })
+    const payment = await db.$transaction(async (tx: any) => {
+      const supplier = await tx.supplier.findUnique({
+        where: { id: data.supplierId },
+        select: { id: true, name: true, balance: true },
+      })
+      if (!supplier) throw new Error('المورد غير موجود')
+      if (data.amount > supplier.balance + 0.001) {
+        throw new Error(`المبلغ يتجاوز المستحق للمورد "${supplier.name}" (${supplier.balance.toFixed(2)} ج.م)`)
+      }
 
-    if (data.amount > supplier.balance + 0.01) {
-      return NextResponse.json(
-        {
-          error: `المبلغ (${data.amount} ج.م) يتجاوز المستحق للمورد "${supplier.name}" (${supplier.balance.toFixed(2)} ج.م). لا يمكن سداد أكثر من المستحق.`,
-          currentBalance: supplier.balance,
-        },
-        { status: 400 }
-      )
-    }
+      if (data.purchaseId) {
+        const purchase = await tx.purchase.findUnique({
+          where: { id: data.purchaseId },
+          select: { id: true, supplierId: true, total: true, paid: true, status: true },
+        })
+        if (!purchase || purchase.supplierId !== data.supplierId) throw new Error('فاتورة الشراء لا تخص هذا المورد')
+        if (purchase.status !== 'completed') throw new Error('لا يمكن سداد فاتورة شراء غير مكتملة')
+        if (data.amount > Math.max(0, purchase.total - purchase.paid) + 0.001) throw new Error('المبلغ يتجاوز المتبقي على فاتورة الشراء')
+      }
 
-    // Cloudflare D1 doesn't support interactive transactions — build the
-    // operations up front and run them together as one batch transaction.
-    const ops = [
-      db.supplierPayment.create({
+      const deducted = await tx.supplier.updateMany({
+        where: { id: data.supplierId, balance: { gte: data.amount } },
+        data: { balance: { decrement: data.amount }, updatedAt: new Date() },
+      })
+      if (deducted.count !== 1) throw new Error('تغير رصيد المورد أثناء السداد؛ حدّث الصفحة وحاول مرة أخرى')
+
+      if (data.purchaseId) {
+        await tx.purchase.update({ where: { id: data.purchaseId }, data: { paid: { increment: data.amount } } })
+      }
+
+      return tx.supplierPayment.create({
         data: {
           supplierId: data.supplierId,
           purchaseId: data.purchaseId || null,
           amount: data.amount,
           method: data.method,
-          notes: data.notes,
+          notes: data.notes || null,
         },
-      }),
-      db.supplier.update({
-        where: { id: data.supplierId },
-        data: { balance: { decrement: data.amount } },
-      }),
-      ...(data.purchaseId
-        ? [
-            db.purchase.update({
-              where: { id: data.purchaseId },
-              data: { paid: { increment: data.amount } },
-            }),
-          ]
-        : []),
-    ]
-    const payment = await retryOnConflict(async () => {
-      const [created] = await db.$transaction(ops)
-      return created
+      })
     })
 
     await auditLog({ user, action: 'payment', entity: 'supplier', entityId: data.supplierId, after: { amount: data.amount } })
 
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterSupplierPayment } = await import('@/lib/sync')
-      await syncAfterSupplierPayment()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (supplier payment):', syncErr)
-    }
-
     return NextResponse.json(payment, { status: 201 })
   } catch (e: unknown) {
     const err = e as { message?: string }
-    return NextResponse.json({ error: err.message || 'خطأ' }, { status: 500 })
+    const message = err.message || 'خطأ'
+    return NextResponse.json({ error: message }, { status: /غير موجود|لا تخص|يتجاوز|تغير رصيد|لا يمكن سداد/i.test(message) ? 400 : 500 })
   }
 }
