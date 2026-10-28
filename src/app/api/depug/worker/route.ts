@@ -12,6 +12,12 @@ function errorMessage(error: unknown): string {
 }
 
 export async function GET() {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (user.role !== 'admin') {
+    return NextResponse.json({ error: 'تشخيص البنية متاح للمدير العام فقط' }, { status: 403 })
+  }
+
   const result: Record<string, unknown> = {
     ok: true,
     timestamp: new Date().toISOString(),
