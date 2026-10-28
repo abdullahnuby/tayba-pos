@@ -529,6 +529,9 @@ export async function localAtomicAction<T = any>(
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (sale.status !== 'completed') throw new Error('يمكن إلغاء الفواتير المكتملة فقط')
         if (sale.returns.length) throw new Error('لا يمكن إلغاء فاتورة لها مرتجعات مسجلة')
+        if (numeric(sale.paid) > 0.001) {
+          throw new Error('لا يمكن إلغاء فاتورة تم تحصيل مبلغ منها؛ سجّل مرتجعًا بطريقة الاسترداد الصحيحة')
+        }
         for (const item of sale.items) await updateStock(tx, item.variantId, item.quantity)
         const due = Math.max(0, numeric(sale.total) - numeric(sale.paid))
         if (sale.customerId && due > 0) {
