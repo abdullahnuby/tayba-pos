@@ -205,7 +205,7 @@ export async function localAtomicAction<T = any>(
           if (existing) return existing
         }
 
-        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
+        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true, returns: { where: { status: 'completed' }, select: { total: true } } } })
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (['voided', 'draft'].includes(sale.status)) throw new Error('لا يمكن إرجاع فاتورة ملغاة أو مسودة')
 
@@ -240,6 +240,15 @@ export async function localAtomicAction<T = any>(
         const baseSubtotal = normalized.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
         const originalSubtotal = numeric(sale.subtotal)
         const total = originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0
+        const priorReturnTotal = sale.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
+        const outstandingBeforeReturn = Math.max(0, numeric(sale.total) - numeric(sale.paid) - priorReturnTotal)
+        const balanceOffset = sale.customerId ? Math.min(total, outstandingBeforeReturn) : 0
+        const refundMethod = String(input.refundMethod || 'cash')
+        if (refundMethod === 'credit' && !sale.customerId) {
+          throw new Error('لا يمكن إضافة رصيد مرتجع من دون ربط الفاتورة بعميل')
+        }
+        const refundAmount = refundMethod === 'credit' ? 0 : Math.max(0, total - balanceOffset)
+        const balanceReduction = refundMethod === 'credit' ? total : balanceOffset
         const allReturned = sale.items.every((saleItem: AnyRecord) => {
           const previous = alreadyReturned.get(saleItem.id) || 0
           const additional = normalized.filter((item) => item.saleItem.id === saleItem.id).reduce((sum, item) => sum + item.quantity, 0)
@@ -257,10 +266,11 @@ export async function localAtomicAction<T = any>(
             date: dateValue(input.date),
             subtotal: baseSubtotal,
             total,
+            refundAmount,
             reason: input.reason || null,
             notes: input.notes || null,
             status: 'completed',
-            refundMethod: input.refundMethod || 'cash',
+            refundMethod,
             idempotencyKey: idempotencyKey || null,
             items: {
               create: normalized.map((item) => ({
@@ -277,8 +287,11 @@ export async function localAtomicAction<T = any>(
         })
         for (const item of normalized) await updateStock(tx, item.saleItem.variantId, item.quantity)
         await tx.sale.update({ where: { id: sale.id }, data: { status: allReturned ? 'returned' : 'partial_return' } })
-        if (sale.customerId && input.refundMethod === 'credit' && total > 0) {
-          await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { decrement: total }, updatedAt: new Date() } })
+        if (sale.customerId && balanceReduction > 0) {
+          await tx.customer.update({
+            where: { id: sale.customerId },
+            data: { balance: { decrement: balanceReduction }, updatedAt: new Date() },
+          })
         }
         return created
       }) as Promise<T>
