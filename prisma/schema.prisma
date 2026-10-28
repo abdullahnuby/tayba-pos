@@ -5,16 +5,12 @@
 // ============================================================
 
 generator client {
-  provider     = "prisma-client"
-  output       = "../src/generated/prisma"
-  engineType   = "client"
-  runtime      = "cloudflare"
-  moduleFormat = "esm"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./db/tayba.db"
+  url      = "file:../data/tayba.db"
 }
 
 // ------------------------------------------------------------
@@ -36,6 +32,7 @@ model User {
   auditLogs        AuditLog[]
   stockAdjustments StockAdjustment[]
   sales            Sale[]
+  customerPayments CustomerPayment[]
 }
 
 // ------------------------------------------------------------
@@ -189,6 +186,8 @@ model PurchaseItem {
   unit            String?
   unitFactor      Int?
 
+  purchaseReturnItems PurchaseReturnItem[]
+
   @@index([purchaseId])
   @@index([variantId])
 }
@@ -204,8 +203,11 @@ model PurchaseReturn {
   total      Float    @default(0)
   reason     String?
   notes      String?
-  status     String   @default("completed")
-  createdAt  DateTime @default(now())
+  status         String   @default("completed")
+  refundMethod   String   @default("credit")
+  refundAmount   Float    @default(0)
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
 
   items            PurchaseReturnItem[]
   supplierPayments SupplierPayment[]
@@ -220,6 +222,8 @@ model PurchaseReturnItem {
   quantity        Int
   unitCost        Float
   total           Float
+  purchaseItemId  String?
+  purchaseItem    PurchaseItem? @relation(fields: [purchaseItemId], references: [id])
 }
 
 // ------------------------------------------------------------
@@ -242,6 +246,7 @@ model Sale {
   paid          Float     @default(0)
   change        Float     @default(0)
   paymentMethod String    @default("cash")
+  idempotencyKey String?  @unique
   status        String    @default("completed")
   voidReason    String?
   notes         String?
@@ -286,8 +291,10 @@ model SaleReturn {
   total      Float    @default(0)
   reason     String?
   notes      String?
-  status     String   @default("completed")
-  createdAt  DateTime @default(now())
+  status         String   @default("completed")
+  refundMethod   String   @default("cash")
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
 
   items            SaleReturnItem[]
   customerPayments CustomerPayment[]
@@ -316,6 +323,8 @@ model SaleReturnItem {
 
 model CustomerPayment {
   id           String      @id @default(cuid())
+  userId       String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   customerId   String
   customer     Customer    @relation(fields: [customerId], references: [id])
   saleId       String?
