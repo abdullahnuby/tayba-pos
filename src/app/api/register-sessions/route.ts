@@ -58,7 +58,10 @@ export async function POST(req: NextRequest) {
     })
     await auditLog({ user, action: 'register_open', entity: 'registerSession', entityId: session.id, after: { openingFloat: session.openingFloat } })
     return NextResponse.json(session, { status: 201 })
-  } catch (e: unknown) { return NextResponse.json({ error: e instanceof Error ? e.message : 'خطأ' }, { status: 500 }) }
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'خطأ'
+    return NextResponse.json({ error: message }, { status: /وردية مفتوحة بالفعل/i.test(message) ? 409 : 500 })
+  }
 }
 
 export async function PATCH(req: NextRequest) {
@@ -77,19 +80,46 @@ export async function PATCH(req: NextRequest) {
     if (session.status === 'closed') return NextResponse.json({ error: 'الوردية مغلقة بالفعل' }, { status: 409 })
 
     const now = new Date()
-    const sales = await db.sale.findMany({ where: { date: { gte: session.openedAt, lte: now }, status: 'completed', userId: session.userId }, select: { invoiceNo: true, total: true, paymentMethod: true } })
-    const cashSales = sales.filter(s => s.paymentMethod === 'cash').reduce((s, x) => s + x.total, 0)
-    const cardSales = sales.filter(s => s.paymentMethod === 'card').reduce((s, x) => s + x.total, 0)
-    const transferSales = sales.filter(s => s.paymentMethod === 'transfer').reduce((s, x) => s + x.total, 0)
-    const creditSales = sales.filter(s => s.paymentMethod === 'credit').reduce((s, x) => s + x.total, 0)
-    const customerCash = (await db.customerPayment.aggregate({ where: { date: { gte: session.openedAt, lte: now }, method: 'cash' }, _sum: { amount: true } }))._sum.amount || 0
-    const returns = await db.saleReturn.findMany({ where: { date: { gte: session.openedAt, lte: now }, status: 'completed', sale: { userId: session.userId } }, select: { total: true } })
-    const cashRefunds = returns.reduce((s, r) => s + r.total, 0)
-    const expectedCash = session.openingFloat + cashSales + customerCash - cashRefunds
+    const sales = await db.sale.findMany({
+      where: { date: { gte: session.openedAt, lte: now }, status: { in: ['completed', 'partial_return', 'returned'] }, userId: session.userId },
+      select: { invoiceNo: true, total: true, paid: true, paymentMethod: true },
+    })
+    const cashSales = sales.filter((sale) => sale.paymentMethod === 'cash').reduce((sum, sale) => sum + sale.paid, 0)
+    const cardSales = sales.filter((sale) => sale.paymentMethod === 'card').reduce((sum, sale) => sum + sale.paid, 0)
+    const transferSales = sales.filter((sale) => sale.paymentMethod === 'transfer').reduce((sum, sale) => sum + sale.paid, 0)
+    const creditSales = sales.filter((sale) => sale.paymentMethod === 'credit').reduce((sum, sale) => sum + sale.total, 0)
+
+    // Only cash collections made by this operator count toward this drawer.
+    // Legacy rows without userId remain in the ledger but are not guessed onto a shift.
+    const customerCash = (await db.customerPayment.aggregate({
+      where: { date: { gte: session.openedAt, lte: now }, method: 'cash', userId: session.userId },
+      _sum: { amount: true },
+    }))._sum.amount || 0
+    const saleCashRefunds = await db.saleReturn.findMany({
+      where: { date: { gte: session.openedAt, lte: now }, status: 'completed', refundMethod: 'cash', userId: session.userId },
+      select: { total: true },
+    })
+    const purchaseCashRefunds = await db.purchaseReturn.findMany({
+      where: { date: { gte: session.openedAt, lte: now }, status: 'completed', refundMethod: 'cash', userId: session.userId },
+      select: { refundAmount: true },
+    })
+    const cashRefunds = saleCashRefunds.reduce((sum, returned) => sum + returned.total, 0)
+    const supplierCashRefunds = purchaseCashRefunds.reduce((sum, returned) => sum + returned.refundAmount, 0)
+    const expectedCash = session.openingFloat + cashSales + customerCash + supplierCashRefunds - cashRefunds
     const difference = parsed.data.closingFloat - expectedCash
-    const updated = await db.registerSession.update({ where: { id: session.id }, data: { closedAt: now, closingFloat: parsed.data.closingFloat, expectedCash, difference, cashSales, cardSales, transferSales, notes: parsed.data.notes || null, status: 'closed' } })
-    const report = { invoiceCount: sales.length, cashSales, cardSales, transferSales, creditSales, customerCash, cashRefunds, openingFloat: session.openingFloat, expectedCash, closingFloat: parsed.data.closingFloat, difference, totalSales: sales.reduce((sum, sale) => sum + sale.total, 0), closedAt: now.toISOString(), note: 'التحصيلات النقدية المنسوبة للكاشير فقط تدخل في درج الوردية؛ التحصيلات القديمة غير المنسوبة لا تُحمّل على وردية بعينها.' }
+    const updated = await db.$transaction(async (tx: any) => {
+      const closed = await tx.registerSession.updateMany({
+        where: { id: session.id, status: 'open' },
+        data: { closedAt: now, closingFloat: parsed.data.closingFloat, expectedCash, difference, cashSales, cardSales, transferSales, notes: parsed.data.notes || null, status: 'closed' },
+      })
+      if (closed.count !== 1) throw new Error('تم إغلاق الوردية بالفعل أو تغيرت حالتها؛ حدّث الصفحة')
+      return tx.registerSession.findUnique({ where: { id: session.id } })
+    })
+    const report = { invoiceCount: sales.length, cashSales, cardSales, transferSales, creditSales, customerCash, cashRefunds, supplierCashRefunds, openingFloat: session.openingFloat, expectedCash, closingFloat: parsed.data.closingFloat, difference, totalSales: sales.reduce((sum, sale) => sum + sale.total, 0), closedAt: now.toISOString(), note: 'التحصيلات النقدية المنسوبة للمستخدم فقط تدخل في درج الوردية؛ التحصيلات القديمة غير المنسوبة لا تُحمّل على وردية بعينها.' }
     await auditLog({ user, action: 'register_close', entity: 'registerSession', entityId: session.id, after: report })
     return NextResponse.json({ ...updated, report })
-  } catch (e: unknown) { return NextResponse.json({ error: e instanceof Error ? e.message : 'خطأ' }, { status: 500 }) }
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'خطأ'
+    return NextResponse.json({ error: message }, { status: /إغلاق الوردية بالفعل|تغيرت حالتها/i.test(message) ? 409 : 500 })
+  }
 }
