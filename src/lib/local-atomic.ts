@@ -544,7 +544,15 @@ export async function localAtomicAction<T = any>(
           include: { items: true },
         })
         for (const [variantId, quantity] of quantities) await updateStock(tx, variantId, -quantity)
-        await tx.supplier.update({ where: { id: purchase.supplierId }, data: { balance: { decrement: returnTotal }, updatedAt: new Date() } })
+        const supplierBalanceReduction = refundMethod === 'credit'
+          ? returnTotal
+          : Math.min(returnTotal, outstandingBeforeReturn)
+        if (supplierBalanceReduction > 0) {
+          await tx.supplier.update({
+            where: { id: purchase.supplierId },
+            data: { balance: { decrement: supplierBalanceReduction }, updatedAt: new Date() },
+          })
+        }
         return created
       }) as Promise<T>
     }
