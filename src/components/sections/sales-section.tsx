@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { clearIdempotencyKey, withIdempotencyKey } from '@/lib/client-idempotency'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,6 +27,7 @@ function money(v: number) { return `${formatEGP(v)} ج.م` }
 
 export function SalesSection({ user }: { user: SessionUser }) {
   const qc = useQueryClient()
+  const submissionKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const setSection = useAppStore(s => s.setSection)
   const barcodeRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
@@ -93,13 +95,13 @@ export function SalesSection({ user }: { user: SessionUser }) {
   })
   const saveSale = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => { const r = await fetch('/api/sales', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'تعذر حفظ الفاتورة'); return j as Sale },
-    onSuccess: (sale: Sale) => { qc.invalidateQueries({ queryKey: ['sales'] }); qc.invalidateQueries({ queryKey: ['pos-products'] }); qc.invalidateQueries({ queryKey: ['register-sessions'] }); setCheckout(false); setPrinting(sale); resetSale(); toast.success(`تمت الفاتورة ${sale.invoiceNo}`) },
+    onSuccess: (sale: Sale) => { clearIdempotencyKey(submissionKeyRef); qc.invalidateQueries({ queryKey: ['sales'] }); qc.invalidateQueries({ queryKey: ['pos-products'] }); qc.invalidateQueries({ queryKey: ['register-sessions'] }); setCheckout(false); setPrinting(sale); resetSale(); toast.success(`تمت الفاتورة ${sale.invoiceNo}`) },
     onError: (e: Error) => toast.error(e.message),
   })
 
   useEffect(() => { setTimeout(() => barcodeRef.current?.focus(), 150) }, [])
 
-  function resetSale() { setCart([]); setCustomerId(''); setCustomerPickerOpen(false); setPaymentMethod('cash'); setPaid(0); setDiscount(0); setHistorical(false); setSaleDate(new Date().toISOString().slice(0, 10)); setSearch(''); setTimeout(() => barcodeRef.current?.focus(), 100) }
+  function resetSale() { clearIdempotencyKey(submissionKeyRef); setCart([]); setCustomerId(''); setCustomerPickerOpen(false); setPaymentMethod('cash'); setPaid(0); setDiscount(0); setHistorical(false); setSaleDate(new Date().toISOString().slice(0, 10)); setSearch(''); setTimeout(() => barcodeRef.current?.focus(), 100) }
 
   function hasPackPricing(v: Variant) { return (v.quarterDozenPrice ?? 0) > 0 || (v.halfDozenPrice ?? 0) > 0 || (v.dozenPrice ?? 0) > 0 }
   function chooseProduct(p: Product) {
@@ -154,9 +156,8 @@ export function SalesSection({ user }: { user: SessionUser }) {
       paymentMethod,
       status: 'completed',
       items: cart.map(i => ({ variantId: i.variantId, quantity: i.quantity * i.factor, unitPrice: i.price / i.factor })),
-      idempotencyKey: `${user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     }
-    saveSale.mutate(payload)
+    saveSale.mutate(withIdempotencyKey(payload, submissionKeyRef))
   }
   function shareReceipt(s: Sale) {
     const text = `طيبة\nفاتورة ${s.invoiceNo}\nالتاريخ: ${formatDateTime(s.date)}\nالإجمالي: ${money(s.total)}`
