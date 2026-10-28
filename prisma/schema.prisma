@@ -160,7 +160,7 @@ model Purchase {
   supplier      Supplier @relation(fields: [supplierId], references: [id])
   userId        String?
   user          User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
-  paymentMethod String  @default("cash")
+  paymentMethod String?
   initialPaid   Float?
   date          DateTime @default(now())
   subtotal   Float    @default(0)
