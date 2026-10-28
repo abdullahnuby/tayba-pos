@@ -228,6 +228,25 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityAfterReturn)
 })
 
+test('VAT-inclusive settings keep the entered total inclusive of VAT', async () => {
+  await db.setting.upsert({ where: { key: 'vatEnabled' }, update: { value: 'true' }, create: { key: 'vatEnabled', value: 'true' } })
+  await db.setting.upsert({ where: { key: 'vatRate' }, update: { value: '14' }, create: { key: 'vatRate', value: '14' } })
+  await db.setting.upsert({ where: { key: 'vatInclusive' }, update: { value: 'true' }, create: { key: 'vatInclusive', value: 'true' } })
+
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      items: [{ variantId, quantity: 1, unitPrice: 100 }],
+      discount: 0,
+      paid: 100,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-vat-inclusive-sale',
+    },
+  })
+  assert.equal(sale.total, 100)
+  assert.ok(Math.abs(sale.taxAmount - (100 - 100 / 1.14)) < 0.0001)
+})
+
 test('bulk stock adjustment is all-or-nothing if one variant is invalid', async () => {
   const beforeQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
   const beforeCount = await db.stockAdjustment.count()
