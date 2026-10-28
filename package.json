@@ -12,7 +12,8 @@
     "db:generate": "prisma generate",
     "db:reset": "echo \"Refusing automatic database reset. Back up and use an explicit local restore procedure.\" && exit 1",
     "db:setup": "prisma db push",
-    "db:studio": "prisma studio"
+    "db:studio": "prisma studio",
+    "test:atomic": "node --experimental-strip-types --test tests/local-atomic.test.ts"
   },
   "dependencies": {
     "@dnd-kit/core": "^6.3.1",
