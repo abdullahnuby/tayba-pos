@@ -5,6 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 
 const paymentSchema = z.object({
+  idempotencyKey: z.string().min(8).max(120).optional(),
   supplierId: z.string().min(1),
   purchaseId: z.string().optional().nullable(),
   amount: z.number().positive('المبلغ يجب أن يكون موجبًا'),
@@ -42,8 +43,17 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
     }
     const data = parsed.data
+    const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 120)) {
+      return NextResponse.json({ error: 'مفتاح منع التكرار يجب أن يكون بين 8 و120 حرفًا' }, { status: 400 })
+    }
+    const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
 
     const payment = await db.$transaction(async (tx: any) => {
+      if (idempotencyKey) {
+        const existing = await tx.supplierPayment.findUnique({ where: { idempotencyKey } })
+        if (existing) return existing
+      }
       const supplier = await tx.supplier.findUnique({
         where: { id: data.supplierId },
         select: { id: true, name: true, balance: true },
@@ -75,6 +85,8 @@ export async function POST(req: NextRequest) {
 
       return tx.supplierPayment.create({
         data: {
+          userId: user.id,
+          idempotencyKey: idempotencyKey || null,
           supplierId: data.supplierId,
           purchaseId: data.purchaseId || null,
           amount: data.amount,
