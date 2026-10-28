@@ -556,6 +556,10 @@ export async function localAtomicAction<T = any>(
         const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (sale.status !== 'draft') throw new Error('يمكن استئناف الفواتير المسودة فقط')
+        const remainingDue = Math.max(0, numeric(sale.total) - numeric(sale.paid))
+        if (remainingDue > 0.001 && !sale.customerId) {
+          throw new Error('لا يمكن استئناف فاتورة عليها مبلغ متبقٍ من دون ربطها بعميل')
+        }
         const totals = new Map<string, number>()
         for (const item of sale.items) totals.set(item.variantId, (totals.get(item.variantId) || 0) + item.quantity)
         for (const [variantId, quantity] of totals) {
