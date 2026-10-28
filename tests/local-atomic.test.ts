@@ -15,6 +15,7 @@ const db = new PrismaClient({ datasources: { db: { url: databaseUrl } } })
 
 let variantId = ''
 let supplierId = ''
+let customerId = ''
 let saleId = ''
 let saleItemId = ''
 let purchaseId = ''
@@ -58,8 +59,10 @@ before(async () => {
     },
   })
   const supplier = await db.supplier.create({ data: { name: 'CI Test Supplier' } })
+  const customer = await db.customer.create({ data: { name: 'CI Test Customer' } })
   variantId = variant.id
   supplierId = supplier.id
+  customerId = customer.id
 })
 
 after(async () => {
@@ -132,6 +135,7 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
   })
   assert.equal(first.id, repeated.id)
   assert.equal(first.total, 10)
+  assert.equal(first.refundAmount, 10)
   assert.equal(await db.saleReturn.count(), 1)
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 9)
 
@@ -146,6 +150,32 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
   assert.equal(finalReturn.total, 10)
   assert.equal((await db.sale.findUniqueOrThrow({ where: { id: saleId } })).status, 'returned')
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 10)
+})
+
+test('cash return reduces outstanding customer debt before refunding cash', async () => {
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      customerId,
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 0,
+      paymentMethod: 'credit',
+      status: 'completed',
+    },
+  })
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 10)
+
+  const returned = await localAtomicAction<any>(db, 'commit_sale_return', {
+    payload: {
+      saleId: sale.id,
+      idempotencyKey: 'ci-credit-return-key',
+      refundMethod: 'cash',
+      items: [{ saleItemId: sale.items[0].id, quantity: 1 }],
+    },
+  })
+  assert.equal(returned.total, 10)
+  assert.equal(returned.refundAmount, 0)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
 })
 
 test('purchase aggregates repeated variant lines and deduplicates repeated submissions', async () => {
