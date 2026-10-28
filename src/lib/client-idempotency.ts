@@ -20,7 +20,9 @@ export function withIdempotencyKey<T extends Record<string, unknown>>(
   payload: T,
   ref: StableSubmissionRef,
 ): T & { idempotencyKey: string } {
-  const { idempotencyKey: _ignored, ...fingerprintPayload } = payload
+  const fingerprintPayload = Object.fromEntries(
+    Object.entries(payload).filter(([key]) => key !== 'idempotencyKey'),
+  )
   const fingerprint = JSON.stringify(fingerprintPayload)
   if (!ref.current || ref.current.fingerprint !== fingerprint) {
     ref.current = { fingerprint, key: createKey() }
