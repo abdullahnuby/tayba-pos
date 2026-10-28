@@ -446,12 +446,13 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityAfterReturn)
 })
 
-test('cash purchase return refunds only the already-paid portion', async () => {
-  const beforeBalance = (await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance
+test('cash purchase return refunds paid goods when supplier account has no outstanding debt', async () => {
+  const cleanSupplier = await db.supplier.create({ data: { name: 'CI supplier with no account debt' } })
+  const beforeBalance = cleanSupplier.balance
   const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
     payload: {
       idempotencyKey: 'ci-fully-paid-purchase-return',
-      supplierId,
+      supplierId: cleanSupplier.id,
       items: [{ variantId, quantity: 2, unitCost: 10, enteredQuantity: 2, unit: 'piece', unitFactor: 1 }],
       discount: 0,
       paid: 20,
@@ -462,7 +463,7 @@ test('cash purchase return refunds only the already-paid portion', async () => {
   const returned = await localAtomicAction<any>(db, 'commit_purchase_return', {
     payload: {
       purchaseId: purchase.id,
-      supplierId,
+      supplierId: cleanSupplier.id,
       refundMethod: 'cash',
       items: [{ purchaseItemId: purchase.items[0].id, quantity: 1 }],
     },
@@ -681,6 +682,40 @@ test('bulk stock adjustment is all-or-nothing if one variant is invalid', async 
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity)
   assert.equal(await db.stockAdjustment.count(), beforeCount)
 })
+test('sale cash refund uses current account balance after an unallocated customer payment', async () => {
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      customerId,
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 0,
+      paymentMethod: 'credit',
+      status: 'completed',
+      idempotencyKey: 'ci-return-after-unallocated-customer-payment',
+    },
+  })
+  await db.customer.update({ where: { id: customerId }, data: { balance: { decrement: 10 } } })
+  await db.customerPayment.create({
+    data: {
+      customerId,
+      saleId: null,
+      amount: 10,
+      method: 'cash',
+      notes: 'unallocated account collection before return',
+    },
+  })
+  const returned = await localAtomicAction<any>(db, 'commit_sale_return', {
+    payload: {
+      saleId: sale.id,
+      idempotencyKey: 'ci-return-after-account-payment',
+      refundMethod: 'cash',
+      items: [{ saleItemId: sale.items[0].id, quantity: 1 }],
+    },
+  })
+  assert.equal(returned.refundAmount, 10)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
+})
+
 test('voiding a sale is blocked when customer collections are not allocated to invoices', async () => {
   const sale = await localAtomicAction<any>(db, 'commit_sale', {
     payload: {
