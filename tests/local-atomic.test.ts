@@ -4,7 +4,7 @@ import { PrismaClient } from '@prisma/client'
 import { unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { localAtomicAction } from '../src/lib/local-atomic.ts'
-import { recognizedLineRevenue, recognizedSaleRevenue } from '../src/lib/reporting.ts'
+import { recognizedLineRevenue, recognizedReturnRevenue, recognizedSaleRevenue } from '../src/lib/reporting.ts'
 
 const databaseUrl = process.env.DATABASE_URL || ''
 if (process.env.ALLOW_TAYBA_TEST_DATABASE !== '1') {
@@ -88,6 +88,69 @@ test('sale is atomic, decrements stock, and deduplicates repeated submissions', 
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 8)
   saleId = first.id
   saleItemId = first.items[0].id
+})
+
+test('split returns reconcile exactly to invoice totals despite fractional unit prices', async () => {
+  await db.setting.upsert({ where: { key: 'vatEnabled' }, update: { value: 'false' }, create: { key: 'vatEnabled', value: 'false' } })
+  await db.setting.upsert({ where: { key: 'vatInclusive' }, update: { value: 'false' }, create: { key: 'vatInclusive', value: 'false' } })
+  const stockBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      items: [{ variantId, quantity: 3, unitPrice: 1 / 3 }],
+      discount: 0,
+      paid: 1,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-split-return-cents-sale',
+    },
+  })
+  assert.equal(sale.total, 1)
+  const saleReturns = []
+  for (let index = 0; index < 3; index++) {
+    saleReturns.push(await localAtomicAction<any>(db, 'commit_sale_return', {
+      payload: {
+        saleId: sale.id,
+        idempotencyKey: `ci-split-return-cents-sale-${index}`,
+        refundMethod: 'cash',
+        items: [{ saleItemId: sale.items[0].id, quantity: 1 }],
+      },
+    }))
+  }
+  assert.deepEqual(saleReturns.map((returned) => returned.total), [0.33, 0.33, 0.34])
+  assert.equal(saleReturns.reduce((sum, returned) => sum + returned.total, 0), sale.total)
+  assert.equal(saleReturns.reduce((sum, returned) => sum + returned.items.reduce((lineSum: number, item: any) => lineSum + item.total, 0), 0), sale.total)
+  assert.equal(saleReturns.reduce((sum, returned) => sum + recognizedReturnRevenue(sale, returned.total), 0), recognizedSaleRevenue(sale))
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, stockBefore)
+
+  const cleanSupplier = await db.supplier.create({ data: { name: 'CI split-return supplier' } })
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      idempotencyKey: 'ci-split-return-cents-purchase',
+      supplierId: cleanSupplier.id,
+      items: [{ variantId, quantity: 3, unitCost: 1 / 3, enteredQuantity: 3, unit: 'piece', unitFactor: 1 }],
+      discount: 0,
+      paid: 1,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  assert.equal(purchase.total, 1)
+  const purchaseReturns = []
+  for (let index = 0; index < 3; index++) {
+    purchaseReturns.push(await localAtomicAction<any>(db, 'commit_purchase_return', {
+      payload: {
+        purchaseId: purchase.id,
+        supplierId: cleanSupplier.id,
+        refundMethod: 'cash',
+        items: [{ purchaseItemId: purchase.items[0].id, quantity: 1 }],
+      },
+    }))
+  }
+  assert.deepEqual(purchaseReturns.map((returned) => returned.total), [0.33, 0.33, 0.34])
+  assert.equal(purchaseReturns.reduce((sum, returned) => sum + returned.total, 0), purchase.total)
+  assert.equal(purchaseReturns.reduce((sum, returned) => sum + returned.items.reduce((lineSum: number, item: any) => lineSum + item.total, 0), 0), purchase.total)
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, stockBefore)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: cleanSupplier.id } })).balance, 0)
 })
 
 test('invoice line totals and balances are rounded to cents', async () => {
