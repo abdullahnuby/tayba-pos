@@ -156,6 +156,9 @@ export async function localAtomicAction<T = any>(
         const paid = money(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
         const paymentMethod = String(input.paymentMethod || 'cash')
+        if (paymentMethod === 'credit' && paid > 0.001) {
+          throw new Error('الفاتورة الآجلة لا يجوز أن تحتوي على مبلغ مدفوع؛ اختر طريقة الدفع الفعلية')
+        }
         if (paid > total + 0.001 && paymentMethod !== 'cash') {
           throw new Error('لا يمكن تسجيل زيادة مدفوعة أو باقي نقدي مع البطاقة أو التحويل أو البيع الآجل')
         }
@@ -347,6 +350,10 @@ export async function localAtomicAction<T = any>(
         const total = money(tax.enabled && tax.inclusive ? taxable : taxable + taxAmount)
         const paid = money(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
+        const paymentMethod = String(input.paymentMethod || 'cash')
+        if (paymentMethod === 'credit' && paid > 0.001) {
+          throw new Error('فاتورة الشراء الآجلة لا يجوز أن تحتوي على مبلغ مدفوع؛ اختر طريقة الدفع الفعلية')
+        }
         if (paid > total + 0.001) throw new Error('المبلغ المدفوع للمورد يتجاوز إجمالي فاتورة الشراء')
 
         const purchaseId = id()
@@ -356,7 +363,7 @@ export async function localAtomicAction<T = any>(
             invoiceNo: await nextInvoiceNumber(tx, 'purchaseCounter', 'purchaseInvoicePrefix', 'PUR'),
             supplierId: supplier.id,
             userId: input.userId || null,
-            paymentMethod: input.paymentMethod || 'cash',
+            paymentMethod,
             initialPaid: Math.min(paid, total),
             idempotencyKey: idempotencyKey || null,
             date: dateValue(input.date),
