@@ -332,8 +332,10 @@ export async function localAtomicAction<T = any>(
         const discount = numeric(input.discount)
         if (discount < 0 || discount > subtotal) throw new Error('قيمة الخصم غير صحيحة')
         const taxable = Math.max(0, subtotal - discount)
-        const taxAmount = tax.enabled ? taxable * tax.rate / 100 : 0
-        const total = taxable + taxAmount
+        const taxAmount = tax.enabled
+          ? (tax.inclusive ? taxable - taxable / (1 + tax.rate / 100) : taxable * tax.rate / 100)
+          : 0
+        const total = tax.enabled && tax.inclusive ? taxable : taxable + taxAmount
         const paid = numeric(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
         if (paid > total + 0.001) throw new Error('المبلغ المدفوع للمورد يتجاوز إجمالي فاتورة الشراء')
