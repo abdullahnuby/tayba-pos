@@ -44,8 +44,10 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const search = url.searchParams.get('search') || ''
   const categoryId = url.searchParams.get('categoryId')
-  const page = Number(url.searchParams.get('page') || '1')
-  const pageSize = Number(url.searchParams.get('pageSize') || '50')
+  const rawPage = Number(url.searchParams.get('page') || '1')
+  const rawPageSize = Number(url.searchParams.get('pageSize') || '50')
+  const page = Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1)
+  const pageSize = Math.min(1000, Math.max(1, Number.isFinite(rawPageSize) ? Math.floor(rawPageSize) : 50))
 
   const where: {
     OR?: Array<{ name?: { contains: string }; description?: { contains: string }; variants?: { some: { sku?: { contains: string }; barcode?: { contains: string } } } }>
@@ -76,7 +78,23 @@ export async function GET(req: NextRequest) {
     db.product.count({ where }),
   ])
 
-  return NextResponse.json({ items: products, total, page, pageSize })
+  const items = user.role === 'cashier'
+    ? products.map((product) => ({
+        ...product,
+        variants: product.variants.map((variant) => {
+          const safeVariant: Record<string, unknown> = { ...variant }
+          delete safeVariant.costPrice
+          delete safeVariant.minQuantity
+          delete safeVariant.reorderQty
+          delete safeVariant.purchaseUnit
+          delete safeVariant.purchaseUnitFactor
+          delete safeVariant.baseUnit
+          return safeVariant
+        }),
+      }))
+    : products
+
+  return NextResponse.json({ items, total, page, pageSize }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(req: NextRequest) {
