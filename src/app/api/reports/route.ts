@@ -21,6 +21,9 @@ export async function GET(req: NextRequest) {
   if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || start > end) {
     return NextResponse.json({ error: 'الفترة الزمنية غير صحيحة' }, { status: 400 })
   }
+  if (end.getTime() - start.getTime() > 366 * 24 * 60 * 60 * 1000) {
+    return NextResponse.json({ error: 'الفترة القصوى للتقرير سنة واحدة؛ اختر فترة أقصر' }, { status: 400 })
+  }
 
   const [sales, purchases, returns, purchaseReturns] = await Promise.all([
     db.sale.findMany({
@@ -39,6 +42,7 @@ export async function GET(req: NextRequest) {
     db.saleReturn.findMany({
       where: { date: { gte: start, lte: end }, status: 'completed' },
       include: {
+        sale: { select: { paymentMethod: true } },
         items: {
           include: {
             saleItem: true,
@@ -86,7 +90,7 @@ export async function GET(req: NextRequest) {
 
   for (const returned of returns) {
     const ratio = returned.subtotal > 0 ? returned.total / returned.subtotal : 0
-    methods.set(returned.refundMethod, (methods.get(returned.refundMethod) || 0) - returned.total)
+    methods.set(returned.sale.paymentMethod, (methods.get(returned.sale.paymentMethod) || 0) - returned.total)
     for (const item of returned.items) {
       const row = best.get(item.variantId) || {
         id: item.variantId, name: item.variant.product.name, qty: 0, revenue: 0, profit: 0,
