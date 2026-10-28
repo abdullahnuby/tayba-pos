@@ -27,6 +27,7 @@ export async function POST(req: NextRequest) {
     const applied = await atomicAction<any[]>('commit_stock_adjustments', {
       payload: {
         userId: user.id,
+        idempotencyKey,
         mode: data.mode,
         items: changes.map((item) => ({
           variantId: item.variantId,
