@@ -228,6 +228,21 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityAfterReturn)
 })
 
+test('repeated bulk inventory requests with the same key apply only once', async () => {
+  const before = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  const payload = {
+    idempotencyKey: 'ci-stock-adjustment-key',
+    items: [{ variantId, quantityChange: 1, type: 'stocktake', reason: 'CI repeat request' }],
+    mode: 'stocktake',
+  }
+  const first = await localAtomicAction<any[]>(db, 'commit_stock_adjustments', { payload })
+  const repeated = await localAtomicAction<any[]>(db, 'commit_stock_adjustments', { payload })
+  assert.equal(first.length, 1)
+  assert.equal(repeated.length, 1)
+  assert.equal(first[0].id, repeated[0].id)
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, before + 1)
+})
+
 test('VAT-inclusive settings keep the entered total inclusive of VAT', async () => {
   await db.setting.upsert({ where: { key: 'vatEnabled' }, update: { value: 'true' }, create: { key: 'vatEnabled', value: 'true' } })
   await db.setting.upsert({ where: { key: 'vatRate' }, update: { value: '14' }, create: { key: 'vatRate', value: '14' } })
