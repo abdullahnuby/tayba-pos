@@ -146,6 +146,9 @@ export async function localAtomicAction<T = any>(
         const total = taxable + taxAmount
         const paid = numeric(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
+        if (status === 'completed' && total - Math.min(paid, total) > 0.001 && !input.customerId) {
+          throw new Error('لا يمكن تسجيل مبلغ آجل أو متبقٍ من دون ربط الفاتورة بعميل')
+        }
         if (input.customerId && !(await tx.customer.findUnique({ where: { id: input.customerId }, select: { id: true } }))) {
           throw new Error('العميل غير موجود')
         }
