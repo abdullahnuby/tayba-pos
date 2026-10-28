@@ -66,7 +66,6 @@ export async function POST(req: NextRequest) {
       ['loyaltyEnabled', 'true'],
       ['loyaltyRate', '0.01'],
       ['receiptFooter', 'شكراً لزيارتكم'],
-      ['autoSyncEnabled', 'true'],
     ] as const
 
     // Cloudflare D1 doesn't support interactive transactions — build every
