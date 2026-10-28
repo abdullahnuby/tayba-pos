@@ -151,6 +151,43 @@ test('pack-unit sale and purchase totals remain exact after base-unit conversion
   assert.ok(Math.abs(purchase.items[0].unitCost * purchase.items[0].quantity - 100) < 0.001)
 })
 
+test('credit invoices reject nonzero paid amounts to protect the cash drawer ledger', async () => {
+  const salesBefore = await db.sale.count()
+  const purchasesBefore = await db.purchase.count()
+  const quantityBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+
+  await assert.rejects(
+    localAtomicAction(db, 'commit_sale', {
+      payload: {
+        customerId,
+        items: [{ variantId, quantity: 1, unitPrice: 10 }],
+        discount: 0,
+        paid: 1,
+        paymentMethod: 'credit',
+        status: 'completed',
+      },
+    }),
+    /الفاتورة الآجلة لا يجوز/,
+  )
+  await assert.rejects(
+    localAtomicAction(db, 'commit_purchase', {
+      payload: {
+        supplierId,
+        items: [{ variantId, quantity: 1, unitCost: 5 }],
+        discount: 0,
+        paid: 1,
+        paymentMethod: 'credit',
+        status: 'completed',
+      },
+    }),
+    /فاتورة الشراء الآجلة لا يجوز/,
+  )
+
+  assert.equal(await db.sale.count(), salesBefore)
+  assert.equal(await db.purchase.count(), purchasesBefore)
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityBefore)
+})
+
 test('sale rejects insufficient stock without partially writing', async () => {
   const countBefore = await db.sale.count()
   const quantityBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
