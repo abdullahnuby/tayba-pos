@@ -23,7 +23,28 @@ export async function GET(req: NextRequest) {
   if (status && status !== 'all') where.status = status
   if (search) where.OR = [{ invoiceNo: { contains: search } }, { customer: { name: { contains: search } } }]
   const [sales, total] = await Promise.all([db.sale.findMany({ where, include: { customer: true, items: { include: { variant: { include: { product: true } } } } }, orderBy: { date: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }), db.sale.count({ where })])
-  return NextResponse.json({ items: sales, total, page, pageSize })
+  const items = user.role === 'cashier'
+    ? sales.map((sale) => ({
+        ...sale,
+        customer: sale.customer ? {
+          id: sale.customer.id,
+          name: sale.customer.name,
+          phone: sale.customer.phone,
+        } : null,
+        items: sale.items.map((item) => {
+          const safeVariant: Record<string, unknown> = { ...item.variant }
+          delete safeVariant.costPrice
+          delete safeVariant.minQuantity
+          delete safeVariant.reorderQty
+          delete safeVariant.purchaseUnit
+          delete safeVariant.purchaseUnitFactor
+          delete safeVariant.baseUnit
+          return { ...item, variant: safeVariant }
+        }),
+      }))
+    : sales
+
+  return NextResponse.json({ items, total, page, pageSize }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(req: NextRequest) {
