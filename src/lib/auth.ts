@@ -35,29 +35,14 @@ const SESSION_TTL_HOURS = 12
 // -----------------------------------------------------
 
 function getAuthSecret(): string {
-  try {
-    if (
-      typeof process !== 'undefined' &&
-      process.env &&
-      typeof process.env.AUTH_SECRET === 'string' &&
-      process.env.AUTH_SECRET.trim() !== ''
-    ) {
-      return process.env.AUTH_SECRET
-    }
-  } catch {
-    // Ignore runtime environment access errors.
+  const secret = typeof process !== 'undefined' ? process.env?.AUTH_SECRET?.trim() : undefined
+  if (!secret) {
+    throw new Error('AUTH_SECRET غير مضبوط. انسخ .env.example إلى .env وضع سرًا عشوائيًا بطول 32 حرفًا على الأقل.')
   }
-
-  if (
-    typeof process !== 'undefined' &&
-    process.env &&
-    process.env.NODE_ENV === 'production'
-  ) {
-    throw new Error('AUTH_SECRET is required in production')
+  if (secret.length < 32 || secret.toLowerCase().includes('replace-with')) {
+    throw new Error('AUTH_SECRET ضعيف أو ما زال في قيمة المثال؛ استخدم سرًا عشوائيًا بطول 32 حرفًا على الأقل.')
   }
-
-  // Development fallback only.
-  return 'pos-clothing-store-secret-change-in-prod'
+  return secret
 }
 
 // -----------------------------------------------------
