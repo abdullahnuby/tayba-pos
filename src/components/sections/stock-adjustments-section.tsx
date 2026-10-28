@@ -1,6 +1,7 @@
 'use client'
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { clearIdempotencyKey, withIdempotencyKey } from '@/lib/client-idempotency'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ interface Product { id:string; name:string; variants:Variant[] }
 
 export function StockAdjustmentsSection() {
   const qc=useQueryClient()
+  const submissionKeyRef=useRef<{fingerprint:string;key:string}|null>(null)
   const [mode,setMode]=useState<'stocktake'|'opening'>('stocktake')
   const [search,setSearch]=useState('')
   const [actual,setActual]=useState<Record<string,string>>({})
@@ -27,8 +29,8 @@ export function StockAdjustmentsSection() {
   const increase=changed.reduce((s,v)=>s+Math.max(0,Number(actual[v.id])-v.quantity),0)
   const decrease=changed.reduce((s,v)=>s+Math.max(0,v.quantity-Number(actual[v.id])),0)
   const mutation=useMutation({
-    mutationFn:async()=>{const items=changed.map(v=>({variantId:v.id,quantityChange:Math.floor(Number(actual[v.id]))-v.quantity,reason:reason.trim()||(mode==='opening'?'رصيد افتتاحي':'جرد مخزون'),type:mode==='opening'?'adjustment':'stocktake'}));const r=await fetch('/api/stock-adjustments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({bulk:true,mode,items})});const j=await r.json();if(!r.ok)throw new Error(j.error||'فشل اعتماد الجرد');return j},
-    onSuccess:(j)=>{qc.invalidateQueries({queryKey:['products-stocktake']});qc.invalidateQueries({queryKey:['products']});toast.success(`تم اعتماد ${j.applied} صنف`);setActual({})},
+    mutationFn:async()=>{const items=changed.map(v=>({variantId:v.id,quantityChange:Math.floor(Number(actual[v.id]))-v.quantity,reason:reason.trim()||(mode==='opening'?'رصيد افتتاحي':'جرد مخزون'),type:mode==='opening'?'adjustment':'stocktake'}));const payload=withIdempotencyKey({bulk:true,mode,items},submissionKeyRef);const r=await fetch('/api/stock-adjustments',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const j=await r.json();if(!r.ok)throw new Error(j.error||'فشل اعتماد الجرد');return j},
+    onSuccess:(j)=>{clearIdempotencyKey(submissionKeyRef);qc.invalidateQueries({queryKey:['products-stocktake']});qc.invalidateQueries({queryKey:['products']});toast.success(`تم اعتماد ${j.applied} صنف`);setActual({})},
     onError:(e:Error)=>toast.error(e.message),
   })
   function fill(){const next:Record<string,string>={};for(const v of variants)next[v.id]=String(v.quantity);setActual(next);toast.success('تم تعبئة الرصيد الدفتري — عدّل الفروقات فقط')}
