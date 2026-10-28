@@ -99,7 +99,7 @@ export function ReturnsSection() {
   const hasItems = returnItems.some((item) => item.quantity > 0)
 
   function closeNewReturn() {
-    clearIdempotencyKey(submissionKeyRef) setNewDialogOpen(false); setSelectedSale(null); setReturnItems([]); setReason(''); setRefundMethod('cash') }
+    clearIdempotencyKey(submissionKeyRef); setNewDialogOpen(false); setSelectedSale(null); setReturnItems([]); setReason(''); setRefundMethod('cash') }
   function submitReturn() {
     const valid = returnItems.filter((i) => i.quantity > 0)
     if (!selectedSale || valid.length === 0) return toast.error('حدد صنفًا واحدًا على الأقل')
