@@ -1,0 +1,502 @@
+import { randomUUID } from 'node:crypto'
+
+type AnyRecord = Record<string, any>
+type DatabaseLike = {
+  $transaction<T>(work: (tx: any) => Promise<T>): Promise<T>
+}
+
+function numeric(value: unknown, fallback = 0): number {
+  const parsed = Number(value)
+  return Number.isFinite(parsed) ? parsed : fallback
+}
+
+function requiredPositiveInt(value: unknown, label: string): number {
+  const parsed = Number(value)
+  if (!Number.isSafeInteger(parsed) || parsed <= 0) {
+    throw new Error(`${label} يجب أن يكون عددًا صحيحًا موجبًا`)
+  }
+  return parsed
+}
+
+function dateValue(value: unknown): Date {
+  if (!value) return new Date()
+  const date = new Date(String(value))
+  if (Number.isNaN(date.getTime())) throw new Error('التاريخ غير صحيح')
+  return date
+}
+
+function id(): string {
+  return randomUUID()
+}
+
+async function settingValue(tx: any, key: string, fallback: string): Promise<string> {
+  const row = await tx.setting.findUnique({ where: { key } })
+  return row?.value ?? fallback
+}
+
+async function nextInvoiceNumber(
+  tx: any,
+  counterKey: string,
+  prefixKey: string,
+  fallbackPrefix: string,
+): Promise<string> {
+  const counterRow = await tx.setting.findUnique({ where: { key: counterKey } })
+  const next = Math.max(0, Math.trunc(numeric(counterRow?.value))) + 1
+  await tx.setting.upsert({
+    where: { key: counterKey },
+    create: { id: id(), key: counterKey, value: String(next) },
+    update: { value: String(next) },
+  })
+  const prefix = (await settingValue(tx, prefixKey, fallbackPrefix)).trim() || fallbackPrefix
+  return `${prefix}-${String(next).padStart(6, '0')}`
+}
+
+async function taxSettings(tx: any): Promise<{ enabled: boolean; rate: number }> {
+  const [enabled, rawRate] = await Promise.all([
+    settingValue(tx, 'vatEnabled', 'false'),
+    settingValue(tx, 'vatRate', '14'),
+  ])
+  return {
+    enabled: enabled.toLowerCase() === 'true',
+    rate: Math.max(0, Math.min(100, numeric(rawRate, 14))),
+  }
+}
+
+function aggregateQuantities(items: AnyRecord[], idField: string, qtyField: string): Map<string, number> {
+  const quantities = new Map<string, number>()
+  for (const item of items) {
+    const itemId = String(item[idField] || '')
+    if (!itemId) throw new Error('بعض البنود غير صحيحة')
+    const quantity = requiredPositiveInt(item[qtyField], 'الكمية')
+    quantities.set(itemId, (quantities.get(itemId) || 0) + quantity)
+  }
+  return quantities
+}
+
+async function updateStock(tx: any, variantId: string, change: number): Promise<void> {
+  const row = await tx.productVariant.findUnique({
+    where: { id: variantId },
+    select: { id: true, quantity: true },
+  })
+  if (!row) throw new Error('بعض المنتجات غير موجودة')
+  const nextQuantity = row.quantity + change
+  if (nextQuantity < 0) throw new Error('المخزون غير كافٍ لتنفيذ العملية')
+  const updated = await tx.productVariant.updateMany({
+    where: { id: variantId, quantity: { gte: Math.max(0, -change) } },
+    data: { quantity: { increment: change }, updatedAt: new Date() },
+  })
+  if (updated.count !== 1) throw new Error('تغير المخزون أثناء العملية؛ أعد المحاولة')
+}
+
+export async function localAtomicAction<T = any>(
+  database: DatabaseLike,
+  action: string,
+  rawInput: AnyRecord = {},
+): Promise<T> {
+  const input: AnyRecord = rawInput?.payload ?? rawInput
+
+  switch (action) {
+    case 'commit_sale': {
+      return database.$transaction(async (tx) => {
+        const items = Array.isArray(input.items) ? input.items : []
+        if (!items.length) throw new Error('الفاتورة يجب أن تحتوي على منتج واحد على الأقل')
+
+        const status = input.status === 'draft' ? 'draft' : 'completed'
+        const idempotencyKey = String(input.idempotencyKey || /\[idem:([^\]]+)\]/.exec(String(input.notes || ''))?.[1] || '').trim()
+        if (idempotencyKey) {
+          const existing = await tx.sale.findUnique({
+            where: { idempotencyKey },
+            include: { items: true },
+          })
+          if (existing) return existing
+        }
+
+        const normalized = items.map((item: AnyRecord) => ({
+          variantId: String(item.variantId || ''),
+          quantity: requiredPositiveInt(item.quantity, 'الكمية'),
+          unitPrice: numeric(item.unitPrice, -1),
+        }))
+        if (normalized.some((item) => !item.variantId || item.unitPrice < 0)) {
+          throw new Error('بيانات المنتجات أو الأسعار غير صحيحة')
+        }
+
+        const totals = new Map<string, number>()
+        for (const item of normalized) totals.set(item.variantId, (totals.get(item.variantId) || 0) + item.quantity)
+
+        const variants = await tx.productVariant.findMany({
+          where: { id: { in: [...totals.keys()] } },
+          select: { id: true, quantity: true, costPrice: true, sku: true },
+        })
+        if (variants.length !== totals.size) throw new Error('بعض المنتجات غير موجودة')
+        const variantMap = new Map(variants.map((variant: AnyRecord) => [variant.id, variant]))
+        if (status === 'completed') {
+          for (const [variantId, quantity] of totals) {
+            if ((variantMap.get(variantId) as AnyRecord).quantity < quantity) {
+              throw new Error('المخزون غير كافٍ لإتمام الفاتورة')
+            }
+          }
+        }
+
+        const subtotal = normalized.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+        const discount = numeric(input.discount)
+        if (discount < 0 || discount > subtotal) throw new Error('قيمة الخصم غير صحيحة')
+        const tax = await taxSettings(tx)
+        const taxable = Math.max(0, subtotal - discount)
+        const taxAmount = tax.enabled ? taxable * tax.rate / 100 : 0
+        const total = taxable + taxAmount
+        const paid = numeric(input.paid)
+        if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
+        if (input.customerId && !(await tx.customer.findUnique({ where: { id: input.customerId }, select: { id: true } }))) {
+          throw new Error('العميل غير موجود')
+        }
+        const saleId = id()
+        const invoiceNo = await nextInvoiceNumber(tx, 'saleCounter', 'saleInvoicePrefix', 'INV')
+        const sale = await tx.sale.create({
+          data: {
+            id: saleId,
+            invoiceNo,
+            customerId: input.customerId || null,
+            userId: input.userId || null,
+            date: dateValue(input.date),
+            subtotal,
+            discount,
+            taxRate: tax.enabled ? tax.rate : 0,
+            taxAmount,
+            total,
+            paid: Math.min(paid, total),
+            change: Math.max(0, paid - total),
+            paymentMethod: input.paymentMethod || 'cash',
+            status,
+            notes: input.notes || null,
+            idempotencyKey: idempotencyKey || null,
+            items: {
+              create: normalized.map((item) => ({
+                id: id(),
+                variantId: item.variantId,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                unitCost: (variantMap.get(item.variantId) as AnyRecord).costPrice,
+                total: item.unitPrice * item.quantity,
+              })),
+            },
+          },
+          include: { items: true },
+        })
+
+        if (status === 'completed') {
+          for (const [variantId, quantity] of totals) await updateStock(tx, variantId, -quantity)
+          const due = Math.max(0, total - Math.min(paid, total))
+          if (input.customerId && due > 0) {
+            await tx.customer.update({ where: { id: input.customerId }, data: { balance: { increment: due }, updatedAt: new Date() } })
+          }
+        }
+        return sale
+      }) as Promise<T>
+    }
+
+    case 'commit_sale_return': {
+      return database.$transaction(async (tx) => {
+        const items = Array.isArray(input.items) ? input.items : []
+        if (!items.length) throw new Error('يجب تحديد بنود للإرجاع')
+        const idempotencyKey = String(input.idempotencyKey || '').trim()
+        if (idempotencyKey) {
+          const existing = await tx.saleReturn.findUnique({ where: { idempotencyKey }, include: { items: true } })
+          if (existing) return existing
+        }
+
+        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
+        if (!sale) throw new Error('الفاتورة غير موجودة')
+        if (['voided', 'draft'].includes(sale.status)) throw new Error('لا يمكن إرجاع فاتورة ملغاة أو مسودة')
+
+        const saleItemMap = new Map(sale.items.map((item: AnyRecord) => [item.id, item]))
+        const returnTotals = await tx.saleReturnItem.groupBy({
+          by: ['saleItemId'],
+          where: { saleReturn: { saleId: sale.id, status: 'completed' } },
+          _sum: { quantity: true },
+        })
+        const alreadyReturned = new Map(returnTotals.map((row: AnyRecord) => [row.saleItemId, numeric(row._sum.quantity)]))
+        const normalized = items.map((item: AnyRecord) => {
+          const saleItem = saleItemMap.get(String(item.saleItemId || '')) as AnyRecord | undefined
+          if (!saleItem) throw new Error('بند الفاتورة غير صحيح')
+          const quantity = requiredPositiveInt(item.quantity, 'كمية الإرجاع')
+          if ((alreadyReturned.get(saleItem.id) || 0) + quantity > saleItem.quantity) {
+            throw new Error('كمية الإرجاع تتجاوز الكمية المباعة')
+          }
+          return { saleItem, quantity, unitPrice: saleItem.unitPrice }
+        })
+        const baseSubtotal = normalized.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+        const originalSubtotal = numeric(sale.subtotal)
+        const total = originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0
+        const allReturned = sale.items.every((saleItem: AnyRecord) => {
+          const previous = alreadyReturned.get(saleItem.id) || 0
+          const additional = normalized.filter((item) => item.saleItem.id === saleItem.id).reduce((sum, item) => sum + item.quantity, 0)
+          return previous + additional >= saleItem.quantity
+        })
+
+        const returnId = id()
+        const created = await tx.saleReturn.create({
+          data: {
+            id: returnId,
+            returnNo: await nextInvoiceNumber(tx, 'returnCounter', 'returnPrefix', 'RET'),
+            saleId: sale.id,
+            customerId: sale.customerId,
+            date: dateValue(input.date),
+            subtotal: baseSubtotal,
+            total,
+            reason: input.reason || null,
+            notes: input.notes || null,
+            status: 'completed',
+            refundMethod: input.refundMethod || 'cash',
+            idempotencyKey: idempotencyKey || null,
+            items: {
+              create: normalized.map((item) => ({
+                id: id(),
+                saleItemId: item.saleItem.id,
+                variantId: item.saleItem.variantId,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                total: item.unitPrice * item.quantity,
+              })),
+            },
+          },
+          include: { items: true },
+        })
+        for (const item of normalized) await updateStock(tx, item.saleItem.variantId, item.quantity)
+        await tx.sale.update({ where: { id: sale.id }, data: { status: allReturned ? 'returned' : 'partial_return' } })
+        if (sale.customerId && input.refundMethod === 'credit' && total > 0) {
+          await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { decrement: total }, updatedAt: new Date() } })
+        }
+        return created
+      }) as Promise<T>
+    }
+
+    case 'commit_purchase': {
+      return database.$transaction(async (tx) => {
+        const items = Array.isArray(input.items) ? input.items : []
+        if (!items.length) throw new Error('فاتورة الشراء يجب أن تحتوي على بند واحد على الأقل')
+        const normalized = items.map((item: AnyRecord) => ({
+          variantId: String(item.variantId || ''),
+          quantity: requiredPositiveInt(item.quantity, 'الكمية'),
+          unitCost: numeric(item.unitCost, -1),
+          enteredQuantity: numeric(item.enteredQuantity, numeric(item.quantity)),
+          unit: String(item.unit || 'piece'),
+          unitFactor: Math.max(1, Math.trunc(numeric(item.unitFactor, 1))),
+        }))
+        if (normalized.some((item) => !item.variantId || item.unitCost < 0)) throw new Error('بيانات فاتورة الشراء غير صحيحة')
+        const supplier = await tx.supplier.findUnique({ where: { id: String(input.supplierId || '') } })
+        if (!supplier) throw new Error('المورد غير موجود')
+        const variantIds = [...new Set(normalized.map((item) => item.variantId))]
+        const variants = await tx.productVariant.findMany({ where: { id: { in: variantIds } } })
+        if (variants.length !== variantIds.length) throw new Error('بعض المنتجات غير موجودة')
+        const tax = await taxSettings(tx)
+        const subtotal = normalized.reduce((sum, item) => sum + item.unitCost * item.quantity, 0)
+        const discount = numeric(input.discount)
+        if (discount < 0 || discount > subtotal) throw new Error('قيمة الخصم غير صحيحة')
+        const taxable = Math.max(0, subtotal - discount)
+        const taxAmount = tax.enabled ? taxable * tax.rate / 100 : 0
+        const total = taxable + taxAmount
+        const paid = numeric(input.paid)
+        if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
+
+        const purchaseId = id()
+        const created = await tx.purchase.create({
+          data: {
+            id: purchaseId,
+            invoiceNo: await nextInvoiceNumber(tx, 'purchaseCounter', 'purchaseInvoicePrefix', 'PUR'),
+            supplierId: supplier.id,
+            date: dateValue(input.date),
+            subtotal,
+            discount,
+            taxRate: tax.enabled ? tax.rate : 0,
+            taxAmount,
+            total,
+            paid: Math.min(paid, total),
+            status: input.status === 'draft' ? 'draft' : 'completed',
+            notes: input.notes || null,
+            items: {
+              create: normalized.map((item) => ({
+                id: id(),
+                variantId: item.variantId,
+                quantity: item.quantity,
+                unitCost: item.unitCost,
+                total: item.unitCost * item.quantity,
+                enteredQuantity: item.enteredQuantity,
+                unit: item.unit,
+                unitFactor: item.unitFactor,
+              })),
+            },
+          },
+          include: { items: true },
+        })
+        if (created.status === 'completed') {
+          for (const item of normalized) {
+            const old = variants.find((variant: AnyRecord) => variant.id === item.variantId) as AnyRecord
+            const nextQty = old.quantity + item.quantity
+            const nextCost = nextQty > 0 ? (old.quantity * old.costPrice + item.quantity * item.unitCost) / nextQty : item.unitCost
+            await tx.productVariant.update({
+              where: { id: item.variantId },
+              data: { quantity: nextQty, costPrice: nextCost, updatedAt: new Date() },
+            })
+          }
+          const due = Math.max(0, total - Math.min(paid, total))
+          if (due > 0) await tx.supplier.update({ where: { id: supplier.id }, data: { balance: { increment: due }, updatedAt: new Date() } })
+        }
+        return created
+      }) as Promise<T>
+    }
+
+    case 'commit_purchase_return': {
+      return database.$transaction(async (tx) => {
+        const items = Array.isArray(input.items) ? input.items : []
+        if (!items.length) throw new Error('المرتجع يجب أن يحتوي على بند واحد على الأقل')
+        const idempotencyKey = String(input.idempotencyKey || '').trim()
+        if (idempotencyKey) {
+          const existing = await tx.purchaseReturn.findUnique({ where: { idempotencyKey }, include: { items: true } })
+          if (existing) return existing
+        }
+        const purchase = await tx.purchase.findUnique({ where: { id: String(input.purchaseId || '') }, include: { items: true } })
+        if (!purchase) throw new Error('فاتورة الشراء غير موجودة')
+        if (purchase.status !== 'completed') throw new Error('لا يمكن إرجاع فاتورة شراء غير مكتملة')
+        if (input.supplierId && input.supplierId !== purchase.supplierId) throw new Error('المورد لا يطابق فاتورة الشراء')
+
+        const purchaseItemMap = new Map(purchase.items.map((item: AnyRecord) => [item.id, item]))
+        const returnedRows = await tx.purchaseReturnItem.groupBy({
+          by: ['purchaseItemId'],
+          where: { purchaseReturn: { purchaseId: purchase.id, status: 'completed' } },
+          _sum: { quantity: true },
+        })
+        const returnedMap = new Map(returnedRows.map((row: AnyRecord) => [row.purchaseItemId, numeric(row._sum.quantity)]))
+        const normalized = items.map((item: AnyRecord) => {
+          const purchaseItem = purchaseItemMap.get(String(item.purchaseItemId || '')) as AnyRecord | undefined
+          if (!purchaseItem) throw new Error('بند فاتورة الشراء غير صحيح')
+          const quantity = requiredPositiveInt(item.quantity, 'كمية الإرجاع')
+          if ((returnedMap.get(purchaseItem.id) || 0) + quantity > purchaseItem.quantity) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة')
+          return { purchaseItem, quantity }
+        })
+        const baseSubtotal = normalized.reduce((sum, item) => sum + item.purchaseItem.unitCost * item.quantity, 0)
+        const returnTotal = purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0
+        const quantities = new Map<string, number>()
+        for (const item of normalized) quantities.set(item.purchaseItem.variantId, (quantities.get(item.purchaseItem.variantId) || 0) + item.quantity)
+        for (const [variantId, quantity] of quantities) {
+          const variant = await tx.productVariant.findUnique({ where: { id: variantId }, select: { quantity: true } })
+          if (!variant || variant.quantity < quantity) throw new Error('المخزون غير كافٍ لتنفيذ المرتجع')
+        }
+        const created = await tx.purchaseReturn.create({
+          data: {
+            id: id(),
+            returnNo: await nextInvoiceNumber(tx, 'purchaseReturnCounter', 'purchaseReturnPrefix', 'PRET'),
+            purchaseId: purchase.id,
+            supplierId: purchase.supplierId,
+            date: dateValue(input.date),
+            total: returnTotal,
+            reason: input.reason || null,
+            notes: input.notes || null,
+            status: 'completed',
+            refundMethod: input.refundMethod || 'credit',
+            refundAmount: input.refundAmount == null ? returnTotal : Math.min(returnTotal, numeric(input.refundAmount)),
+            idempotencyKey: idempotencyKey || null,
+            items: {
+              create: normalized.map((item) => ({
+                id: id(),
+                purchaseItemId: item.purchaseItem.id,
+                variantId: item.purchaseItem.variantId,
+                quantity: item.quantity,
+                unitCost: item.purchaseItem.unitCost,
+                total: item.purchaseItem.unitCost * item.quantity,
+              })),
+            },
+          },
+          include: { items: true },
+        })
+        for (const [variantId, quantity] of quantities) await updateStock(tx, variantId, -quantity)
+        await tx.supplier.update({ where: { id: purchase.supplierId }, data: { balance: { decrement: returnTotal }, updatedAt: new Date() } })
+        return created
+      }) as Promise<T>
+    }
+
+    case 'void_sale': {
+      return database.$transaction(async (tx) => {
+        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true, returns: true } })
+        if (!sale) throw new Error('الفاتورة غير موجودة')
+        if (sale.status !== 'completed') throw new Error('يمكن إلغاء الفواتير المكتملة فقط')
+        if (sale.returns.length) throw new Error('لا يمكن إلغاء فاتورة لها مرتجعات مسجلة')
+        for (const item of sale.items) await updateStock(tx, item.variantId, item.quantity)
+        const due = Math.max(0, numeric(sale.total) - numeric(sale.paid))
+        if (sale.customerId && due > 0) {
+          await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { decrement: due }, updatedAt: new Date() } })
+        }
+        return tx.sale.update({ where: { id: sale.id }, data: { status: 'voided', voidReason: input.voidReason || 'إلغاء بدون سبب' } })
+      }) as Promise<T>
+    }
+
+    case 'resume_sale': {
+      return database.$transaction(async (tx) => {
+        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
+        if (!sale) throw new Error('الفاتورة غير موجودة')
+        if (sale.status !== 'draft') throw new Error('يمكن استئناف الفواتير المسودة فقط')
+        const totals = new Map<string, number>()
+        for (const item of sale.items) totals.set(item.variantId, (totals.get(item.variantId) || 0) + item.quantity)
+        for (const [variantId, quantity] of totals) {
+          const variant = await tx.productVariant.findUnique({ where: { id: variantId }, select: { quantity: true } })
+          if (!variant || variant.quantity < quantity) throw new Error('المخزون غير كافٍ لإتمام الفاتورة')
+        }
+        for (const [variantId, quantity] of totals) await updateStock(tx, variantId, -quantity)
+        if (sale.customerId) {
+          const due = Math.max(0, numeric(sale.total) - numeric(sale.paid))
+          if (due > 0) await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { increment: due }, updatedAt: new Date() } })
+        }
+        return tx.sale.update({ where: { id: sale.id }, data: { status: 'completed' } })
+      }) as Promise<T>
+    }
+
+    case 'commit_stock_adjustment': {
+      return database.$transaction(async (tx) => {
+        const payload = input.payload ?? input
+        const variantId = String(payload.variantId || '')
+        const change = Number(payload.quantityChange)
+        if (!variantId || !Number.isSafeInteger(change) || change === 0) throw new Error('قيمة التعديل غير صحيحة')
+        await updateStock(tx, variantId, change)
+        const variant = await tx.productVariant.findUnique({ where: { id: variantId }, select: { productId: true } })
+        return tx.stockAdjustment.create({
+          data: {
+            id: id(),
+            variantId,
+            productId: variant.productId,
+            userId: payload.userId || null,
+            type: payload.type || 'adjustment',
+            quantityChange: change,
+            reason: payload.reason || null,
+            notes: payload.notes || null,
+          },
+        })
+      }) as Promise<T>
+    }
+
+    case 'void_purchase': {
+      return database.$transaction(async (tx) => {
+        const purchase = await tx.purchase.findUnique({ where: { id: String(input.purchaseId || '') }, include: { items: true, returns: true, supplierPayments: true } })
+        if (!purchase) throw new Error('فاتورة الشراء غير موجودة')
+        if (purchase.status !== 'completed') throw new Error('يمكن إلغاء فواتير الشراء المكتملة فقط')
+        if (purchase.returns.length || purchase.supplierPayments.length || numeric(purchase.paid) > 0) {
+          throw new Error('لا يمكن إلغاء فاتورة شراء عليها مرتجع أو دفعات؛ استخدم مرتجع الشراء وتسوية المورد')
+        }
+        const totals = new Map<string, number>()
+        for (const item of purchase.items) totals.set(item.variantId, (totals.get(item.variantId) || 0) + item.quantity)
+        for (const [variantId, quantity] of totals) {
+          const variant = await tx.productVariant.findUnique({ where: { id: variantId }, select: { quantity: true } })
+          if (!variant || variant.quantity < quantity) throw new Error('المخزون الحالي لا يسمح بإلغاء فاتورة الشراء')
+        }
+        for (const [variantId, quantity] of totals) await updateStock(tx, variantId, -quantity)
+        const due = Math.max(0, numeric(purchase.total) - numeric(purchase.paid))
+        if (due > 0) await tx.supplier.update({ where: { id: purchase.supplierId }, data: { balance: { decrement: due }, updatedAt: new Date() } })
+        return tx.purchase.update({
+          where: { id: purchase.id },
+          data: { status: 'voided', notes: `${purchase.notes || ''} [void: ${input.voidReason || 'إلغاء بدون سبب'}]`.trim() },
+        })
+      }) as Promise<T>
+    }
+
+    default:
+      throw new Error(`Unsupported local atomic action: ${action}`)
+  }
+}
