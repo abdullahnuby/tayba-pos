@@ -16,7 +16,7 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  const auth = await authenticate(req)
+  const auth = await authenticate(req, { roles: ['admin', 'manager'] })
   if (auth instanceof Response) return auth
 
   const { id } = await params
