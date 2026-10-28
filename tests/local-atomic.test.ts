@@ -111,6 +111,46 @@ test('invoice line totals and balances are rounded to cents', async () => {
   assert.equal(sale.change, 0)
 })
 
+test('pack-unit sale and purchase totals remain exact after base-unit conversion', async () => {
+  await db.setting.upsert({ where: { key: 'vatEnabled' }, update: { value: 'false' }, create: { key: 'vatEnabled', value: 'false' } })
+  await db.setting.upsert({ where: { key: 'vatInclusive' }, update: { value: 'false' }, create: { key: 'vatInclusive', value: 'false' } })
+  const product = await db.product.findFirstOrThrow()
+  const packVariant = await db.productVariant.create({
+    data: { productId: product.id, sku: 'CI-PACK-PRECISION', quantity: 100, costPrice: 4, sellPrice: 2 },
+  })
+
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      items: [{ variantId: packVariant.id, quantity: 12, unitPrice: 20 / 12 }],
+      discount: 0,
+      paid: 20,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-dozen-sale-total',
+    },
+  })
+  assert.equal(sale.subtotal, 20)
+  assert.equal(sale.total, 20)
+  assert.equal(sale.items[0].total, 20)
+  assert.ok(Math.abs(sale.items[0].unitPrice * sale.items[0].quantity - 20) < 0.001)
+
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      supplierId,
+      items: [{ variantId: packVariant.id, quantity: 24, unitCost: 100 / 24, enteredQuantity: 1, unit: 'carton', unitFactor: 24 }],
+      discount: 0,
+      paid: 100,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-carton-purchase-total',
+    },
+  })
+  assert.equal(purchase.subtotal, 100)
+  assert.equal(purchase.total, 100)
+  assert.equal(purchase.items[0].total, 100)
+  assert.ok(Math.abs(purchase.items[0].unitCost * purchase.items[0].quantity - 100) < 0.001)
+})
+
 test('sale rejects insufficient stock without partially writing', async () => {
   const countBefore = await db.sale.count()
   const quantityBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
