@@ -218,7 +218,7 @@ export async function localAtomicAction<T = any>(
           where: { saleReturn: { is: { saleId: sale.id, status: 'completed' } } },
           _sum: { quantity: true },
         })
-        const alreadyReturned = new Map(returnTotals.map((row: AnyRecord) => [row.saleItemId, numeric(row._sum.quantity)]))
+        const alreadyReturned = new Map<string, number>(returnTotals.map((row: AnyRecord) => [String(row.saleItemId), numeric(row._sum.quantity)]))
         const normalized = items.map((item: AnyRecord) => {
           const saleItem = saleItemMap.get(String(item.saleItemId || '')) as AnyRecord | undefined
           if (!saleItem) throw new Error('بند الفاتورة غير صحيح')
