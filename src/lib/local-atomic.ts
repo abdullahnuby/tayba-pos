@@ -224,7 +224,7 @@ export async function localAtomicAction<T = any>(
           if (existing) return existing
         }
 
-        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true, returns: { where: { status: 'completed' }, select: { total: true } } } })
+        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (['voided', 'draft'].includes(sale.status)) throw new Error('لا يمكن إرجاع فاتورة ملغاة أو مسودة')
 
@@ -259,9 +259,14 @@ export async function localAtomicAction<T = any>(
         const baseSubtotal = money(normalized.reduce((sum, item) => sum + money(item.unitPrice * item.quantity), 0))
         const originalSubtotal = numeric(sale.subtotal)
         const total = money(originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0)
-        const priorReturnTotal = sale.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
-        const outstandingBeforeReturn = money(Math.max(0, numeric(sale.total) - numeric(sale.paid) - priorReturnTotal))
-        const balanceOffset = money(sale.customerId ? Math.min(total, outstandingBeforeReturn) : 0)
+        const customerAccount = sale.customerId
+          ? await tx.customer.findUnique({ where: { id: sale.customerId }, select: { balance: true } })
+          : null
+        // A customer payment may be posted to the account without assigning it
+        // to a specific invoice. Use the account's authoritative current balance
+        // so returns do not create a duplicate debt or a false cash refund.
+        const accountDebt = money(Math.max(0, numeric(customerAccount?.balance)))
+        const balanceOffset = money(sale.customerId ? Math.min(total, accountDebt) : 0)
         const refundMethod = String(input.refundMethod || 'cash')
         if (refundMethod === 'credit' && !sale.customerId) {
           throw new Error('لا يمكن إضافة رصيد مرتجع من دون ربط الفاتورة بعميل')
@@ -426,10 +431,7 @@ export async function localAtomicAction<T = any>(
         }
         const purchase = await tx.purchase.findUnique({
           where: { id: String(input.purchaseId || '') },
-          include: {
-            items: true,
-            returns: { where: { status: 'completed' }, select: { total: true } },
-          },
+          include: { items: true },
         })
         if (!purchase) throw new Error('فاتورة الشراء غير موجودة')
         if (purchase.status !== 'completed') throw new Error('لا يمكن إرجاع فاتورة شراء غير مكتملة')
@@ -498,11 +500,17 @@ export async function localAtomicAction<T = any>(
         const baseSubtotal = money(normalized.reduce((sum, item) => sum + money(item.purchaseItem.unitCost * item.quantity), 0))
         const returnTotal = money(purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0)
         const refundMethod = String(input.refundMethod || 'credit')
-        const priorReturnTotal = purchase.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
-        const outstandingBeforeReturn = money(Math.max(0, numeric(purchase.total) - numeric(purchase.paid) - priorReturnTotal))
+        const supplierAccount = await tx.supplier.findUnique({
+          where: { id: purchase.supplierId },
+          select: { balance: true },
+        })
+        if (!supplierAccount) throw new Error('المورد غير موجود')
+        // Account-level payments may be intentionally unallocated to one invoice.
+        // Offset the live supplier balance first before authorizing an actual refund.
+        const accountDebt = money(Math.max(0, numeric(supplierAccount.balance)))
         const maximumCashRefund = refundMethod === 'credit'
           ? 0
-          : money(Math.max(0, returnTotal - Math.min(returnTotal, outstandingBeforeReturn)))
+          : money(Math.max(0, returnTotal - Math.min(returnTotal, accountDebt)))
         const refundAmount = input.refundAmount == null
           ? maximumCashRefund
           : money(numeric(input.refundAmount, -1))
@@ -546,7 +554,7 @@ export async function localAtomicAction<T = any>(
         for (const [variantId, quantity] of quantities) await updateStock(tx, variantId, -quantity)
         const supplierBalanceReduction = refundMethod === 'credit'
           ? returnTotal
-          : Math.min(returnTotal, outstandingBeforeReturn)
+          : Math.min(returnTotal, accountDebt)
         if (supplierBalanceReduction > 0) {
           await tx.supplier.update({
             where: { id: purchase.supplierId },
