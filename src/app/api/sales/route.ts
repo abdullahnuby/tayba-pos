@@ -32,6 +32,9 @@ export async function POST(req: NextRequest) {
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
     const data = schema.parse(await req.json())
     const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 120)) {
+      return NextResponse.json({ error: 'مفتاح منع التكرار يجب أن يكون بين 8 و120 حرفًا' }, { status: 400 })
+    }
     const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
 
     if (user.role === 'cashier') {
