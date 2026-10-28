@@ -150,6 +150,10 @@ export async function localAtomicAction<T = any>(
         const total = tax.enabled && tax.inclusive ? taxable : taxable + taxAmount
         const paid = numeric(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
+        const paymentMethod = String(input.paymentMethod || 'cash')
+        if (paid > total + 0.001 && paymentMethod !== 'cash') {
+          throw new Error('لا يمكن تسجيل زيادة مدفوعة أو باقي نقدي مع البطاقة أو التحويل أو البيع الآجل')
+        }
         if (status === 'completed' && total - Math.min(paid, total) > 0.001 && !input.customerId) {
           throw new Error('لا يمكن تسجيل مبلغ آجل أو متبقٍ من دون ربط الفاتورة بعميل')
         }
@@ -173,7 +177,7 @@ export async function localAtomicAction<T = any>(
             paid: Math.min(paid, total),
             initialPaid: Math.min(paid, total),
             change: Math.max(0, paid - total),
-            paymentMethod: input.paymentMethod || 'cash',
+            paymentMethod,
             status,
             notes: input.notes || null,
             idempotencyKey: idempotencyKey || null,
