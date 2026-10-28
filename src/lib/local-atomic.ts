@@ -355,6 +355,13 @@ export async function localAtomicAction<T = any>(
           const existing = await tx.purchase.findUnique({ where: { idempotencyKey }, include: { items: true } })
           if (existing) return existing
         }
+        if (input.requiresOpenShift) {
+          const openShift = await tx.registerSession.findFirst({
+            where: { userId: String(input.userId || ''), status: 'open' },
+            select: { id: true },
+          })
+          if (!openShift) throw new Error('الوردية اتقفلت قبل تسجيل الفاتورة؛ افتح وردية جديدة وحاول مرة أخرى')
+        }
         const items = Array.isArray(input.items) ? input.items : []
         if (!items.length) throw new Error('فاتورة الشراء يجب أن تحتوي على بند واحد على الأقل')
         const normalized = items.map((item: AnyRecord) => ({
