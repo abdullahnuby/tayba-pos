@@ -256,18 +256,29 @@ test('purchase aggregates repeated variant lines and deduplicates repeated submi
 })
 
 test('purchase returns are linked to source lines and cannot exceed purchased quantity', async () => {
+  await assert.rejects(
+    localAtomicAction(db, 'commit_purchase_return', {
+      payload: {
+        purchaseId,
+        supplierId,
+        refundMethod: 'cash',
+        refundAmount: 7,
+        items: [{ purchaseItemId, quantity: 1 }],
+      },
+    }),
+    /تجاوز المبلغ المدفوع للمورد/,
+  )
   const first = await localAtomicAction<any>(db, 'commit_purchase_return', {
     payload: {
       purchaseId,
       supplierId,
       refundMethod: 'cash',
-      refundAmount: 7,
       items: [{ purchaseItemId, quantity: 1 }],
     },
   })
   assert.equal(first.items[0].purchaseItemId, purchaseItemId)
   assert.equal(first.total, 7)
-  assert.equal(first.refundAmount, 7)
+  assert.equal(first.refundAmount, 0)
   assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, 34)
 
   const creditReturn = await localAtomicAction<any>(db, 'commit_purchase_return', {
@@ -293,6 +304,32 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
     /تتجاوز الكمية المشتراة/,
   )
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityAfterReturn)
+})
+
+test('cash purchase return refunds only the already-paid portion', async () => {
+  const beforeBalance = (await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      idempotencyKey: 'ci-fully-paid-purchase-return',
+      supplierId,
+      items: [{ variantId, quantity: 2, unitCost: 10, enteredQuantity: 2, unit: 'piece', unitFactor: 1 }],
+      discount: 0,
+      paid: 20,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  const returned = await localAtomicAction<any>(db, 'commit_purchase_return', {
+    payload: {
+      purchaseId: purchase.id,
+      supplierId,
+      refundMethod: 'cash',
+      items: [{ purchaseItemId: purchase.items[0].id, quantity: 1 }],
+    },
+  })
+  assert.equal(returned.total, 10)
+  assert.equal(returned.refundAmount, 10)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, beforeBalance - 10)
 })
 
 test('voiding an unpaid purchase reverses its inventory and supplier balance atomically', async () => {
