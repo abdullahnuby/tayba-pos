@@ -5,6 +5,12 @@ import { getCurrentUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 
 export async function GET() {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (!['admin', 'manager'].includes(user.role)) {
+    return NextResponse.json({ error: 'صلاحية غير كافية' }, { status: 403 })
+  }
+
   const settings = await getAllSettings()
   // Mask private key
   if (settings.googlePrivateKey) {
