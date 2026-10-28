@@ -224,7 +224,13 @@ export async function localAtomicAction<T = any>(
           if (existing) return existing
         }
 
-        const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
+        const sale = await tx.sale.findUnique({
+          where: { id: String(input.saleId || '') },
+          include: {
+            items: true,
+            returns: { where: { status: 'completed' }, select: { total: true } },
+          },
+        })
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (['voided', 'draft'].includes(sale.status)) throw new Error('لا يمكن إرجاع فاتورة ملغاة أو مسودة')
 
@@ -258,7 +264,15 @@ export async function localAtomicAction<T = any>(
 
         const baseSubtotal = money(normalized.reduce((sum, item) => sum + money(item.unitPrice * item.quantity), 0))
         const originalSubtotal = numeric(sale.subtotal)
-        const total = money(originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0)
+        const allReturned = sale.items.every((saleItem: AnyRecord) => {
+          const previous = alreadyReturned.get(saleItem.id) || 0
+          const additional = normalized.filter((item) => item.saleItem.id === saleItem.id).reduce((sum, item) => sum + item.quantity, 0)
+          return previous + additional >= saleItem.quantity
+        })
+        const priorReturnTotal = sale.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
+        const total = allReturned
+          ? money(numeric(sale.total) - priorReturnTotal)
+          : money(originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0)
         const customerAccount = sale.customerId
           ? await tx.customer.findUnique({ where: { id: sale.customerId }, select: { balance: true } })
           : null
@@ -273,12 +287,6 @@ export async function localAtomicAction<T = any>(
         }
         const refundAmount = money(refundMethod === 'credit' ? 0 : Math.max(0, total - balanceOffset))
         const balanceReduction = money(refundMethod === 'credit' ? total : balanceOffset)
-        const allReturned = sale.items.every((saleItem: AnyRecord) => {
-          const previous = alreadyReturned.get(saleItem.id) || 0
-          const additional = normalized.filter((item) => item.saleItem.id === saleItem.id).reduce((sum, item) => sum + item.quantity, 0)
-          return previous + additional >= saleItem.quantity
-        })
-
         const returnId = id()
         const created = await tx.saleReturn.create({
           data: {
@@ -303,7 +311,7 @@ export async function localAtomicAction<T = any>(
                 variantId: item.saleItem.variantId,
                 quantity: item.quantity,
                 unitPrice: item.unitPrice,
-                total: item.unitPrice * item.quantity,
+                total: money(item.unitPrice * item.quantity),
               })),
             },
           },
@@ -431,7 +439,7 @@ export async function localAtomicAction<T = any>(
         }
         const purchase = await tx.purchase.findUnique({
           where: { id: String(input.purchaseId || '') },
-          include: { items: true },
+          include: { items: true, returns: { where: { status: 'completed' }, select: { total: true } } },
         })
         if (!purchase) throw new Error('فاتورة الشراء غير موجودة')
         if (purchase.status !== 'completed') throw new Error('لا يمكن إرجاع فاتورة شراء غير مكتملة')
@@ -498,7 +506,15 @@ export async function localAtomicAction<T = any>(
           if (already + quantity > purchased) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة')
         }
         const baseSubtotal = money(normalized.reduce((sum, item) => sum + money(item.purchaseItem.unitCost * item.quantity), 0))
-        const returnTotal = money(purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0)
+        const allReturned = purchase.items.every((purchaseItem: AnyRecord) => {
+          const already = (returnedByPurchaseItem.get(purchaseItem.id) || 0) + (legacyAllocatedByItem.get(purchaseItem.id) || 0)
+          const additional = normalized.filter((item) => item.purchaseItem.id === purchaseItem.id).reduce((sum, item) => sum + item.quantity, 0)
+          return already + additional >= purchaseItem.quantity
+        })
+        const priorReturnTotal = purchase.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
+        const returnTotal = allReturned
+          ? money(numeric(purchase.total) - priorReturnTotal)
+          : money(purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0)
         const refundMethod = String(input.refundMethod || 'credit')
         const supplierAccount = await tx.supplier.findUnique({
           where: { id: purchase.supplierId },
@@ -545,7 +561,7 @@ export async function localAtomicAction<T = any>(
                 variantId: item.purchaseItem.variantId,
                 quantity: item.quantity,
                 unitCost: item.purchaseItem.unitCost,
-                total: item.purchaseItem.unitCost * item.quantity,
+                total: money(item.purchaseItem.unitCost * item.quantity),
               })),
             },
           },
