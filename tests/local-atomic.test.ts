@@ -4,6 +4,7 @@ import { PrismaClient } from '@prisma/client'
 import { unlink } from 'node:fs/promises'
 import { resolve } from 'node:path'
 import { localAtomicAction } from '../src/lib/local-atomic.ts'
+import { recognizedLineRevenue, recognizedSaleRevenue } from '../src/lib/reporting.ts'
 
 const databaseUrl = process.env.DATABASE_URL || ''
 if (process.env.ALLOW_TAYBA_TEST_DATABASE !== '1') {
@@ -307,6 +308,23 @@ test('repeated bulk inventory requests with the same key apply only once', async
   assert.equal(repeated.length, 1)
   assert.equal(first[0].id, repeated[0].id)
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, before + 1)
+})
+
+test('profit reporting excludes VAT and allocates invoice discount proportionally', () => {
+  const exclusiveSale = { subtotal: 200, total: 228, taxAmount: 28 }
+  assert.equal(recognizedSaleRevenue(exclusiveSale), 200)
+  assert.equal(recognizedLineRevenue(exclusiveSale, { total: 100 }), 100)
+  assert.equal(
+    recognizedLineRevenue(exclusiveSale, { total: 100 }) * 2,
+    recognizedSaleRevenue(exclusiveSale),
+  )
+
+  // 200 of item prices less a 10 discount with VAT-inclusive prices:
+  // invoice total is 190, of which 23.333... is VAT.
+  const inclusiveSale = { subtotal: 200, total: 190, taxAmount: 190 - (190 / 1.14) }
+  const firstLine = recognizedLineRevenue(inclusiveSale, { total: 100 })
+  const secondLine = recognizedLineRevenue(inclusiveSale, { total: 100 })
+  assert.ok(Math.abs(firstLine + secondLine - (190 / 1.14)) < 0.0001)
 })
 
 test('VAT-inclusive settings keep the entered total inclusive of VAT', async () => {
