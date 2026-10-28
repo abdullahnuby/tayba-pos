@@ -12,10 +12,9 @@ export async function GET() {
   }
 
   const settings = await getAllSettings()
-  // Mask private key
-  if (settings.googlePrivateKey) {
-    settings.googlePrivateKeyMasked = `${settings.googlePrivateKey.slice(0, 20)}...${settings.googlePrivateKey.slice(-20)}`
-    delete settings.googlePrivateKey
+  // Retired third-party integration settings are not part of the local app.
+  for (const key of Object.keys(settings)) {
+    if (/^(google|appsScript|autoSyncEnabled|lastGoogle)/i.test(key)) delete settings[key]
   }
   return NextResponse.json(settings)
 }
@@ -31,11 +30,15 @@ export async function POST(req: NextRequest) {
     if (!settings || typeof settings !== 'object') {
       return NextResponse.json({ error: 'بيانات غير صحيحة' }, { status: 400 })
     }
-    // If private key is empty or redacted, skip updating it
+    if (Object.keys(settings).some((key) => /^(google|appsScript|autoSyncEnabled|lastGoogle)/i.test(key))) {
+      return NextResponse.json({ error: 'إعدادات المزامنة الخارجية غير متاحة في النسخة المحلية' }, { status: 400 })
+    }
     const cleaned: Record<string, string> = {}
     for (const [k, v] of Object.entries(settings)) {
-      if (k === 'googlePrivateKey' && (!v || v.includes('...'))) continue
-      cleaned[k] = v
+      if (typeof v !== 'string' && typeof v !== 'number' && typeof v !== 'boolean') {
+        return NextResponse.json({ error: `قيمة الإعداد "${k}" غير صحيحة` }, { status: 400 })
+      }
+      cleaned[k] = String(v)
     }
     await setSettings(cleaned)
     clearSettingsCache()
