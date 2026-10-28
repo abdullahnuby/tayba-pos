@@ -1,6 +1,8 @@
 import { after, before, test } from 'node:test'
 import assert from 'node:assert/strict'
 import { PrismaClient } from '@prisma/client'
+import { unlink } from 'node:fs/promises'
+import { resolve } from 'node:path'
 import { localAtomicAction } from '../src/lib/local-atomic.ts'
 
 const databaseUrl = process.env.DATABASE_URL || ''
@@ -363,6 +365,39 @@ test('voiding an unpaid credit sale restores stock and removes recorded customer
   assert.equal(voided.status, 'voided')
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeVoidQuantity + 1)
   assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
+})
+
+test('SQLite backup snapshot passes integrity check and can be opened independently', async () => {
+  const backupPath = resolve(process.cwd(), 'data', 'tayba-test-snapshot.db')
+  await unlink(backupPath).catch(() => undefined)
+  const beforeCounts = {
+    sales: await db.sale.count(),
+    purchases: await db.purchase.count(),
+    saleReturns: await db.saleReturn.count(),
+    purchaseReturns: await db.purchaseReturn.count(),
+    adjustments: await db.stockAdjustment.count(),
+  }
+
+  try {
+    const escapedPath = backupPath.replace(/'/g, "''")
+    await db.$executeRawUnsafe(`VACUUM INTO '${escapedPath}'`)
+    const snapshotDb = new PrismaClient({ datasources: { db: { url: `file:${backupPath}` } } })
+    try {
+      const integrity = await snapshotDb.$queryRawUnsafe<Array<{ quick_check: string }>>('PRAGMA quick_check')
+      assert.equal(integrity[0]?.quick_check, 'ok')
+      assert.deepEqual({
+        sales: await snapshotDb.sale.count(),
+        purchases: await snapshotDb.purchase.count(),
+        saleReturns: await snapshotDb.saleReturn.count(),
+        purchaseReturns: await snapshotDb.purchaseReturn.count(),
+        adjustments: await snapshotDb.stockAdjustment.count(),
+      }, beforeCounts)
+    } finally {
+      await snapshotDb.$disconnect()
+    }
+  } finally {
+    await unlink(backupPath).catch(() => undefined)
+  }
 })
 
 test('bulk stock adjustment is all-or-nothing if one variant is invalid', async () => {
