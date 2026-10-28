@@ -9,7 +9,7 @@ const paymentSchema = z.object({
   customerId: z.string().min(1),
   saleId: z.string().optional().nullable(),
   amount: z.number().positive('المبلغ يجب أن يكون موجبًا'),
-  method: z.string().default('cash'),
+  method: z.enum(['cash', 'card', 'transfer']).default('cash'),
   notes: z.string().optional().nullable(),
 })
 
