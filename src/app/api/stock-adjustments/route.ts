@@ -29,7 +29,6 @@ export async function POST(req: NextRequest) {
       applied.push(result)
       await auditLog({ user, action: 'stock_adjust', entity: 'variant', entityId: item.variantId, after: { type: item.type || 'stocktake', change: item.quantityChange } })
     }
-    try { const { syncAfterAdjustment } = await import('@/lib/sync'); await syncAfterAdjustment() } catch {}
     return NextResponse.json({ ok: true, applied: applied.length, items: applied }, { status: 201 })
   } catch (e: unknown) { return NextResponse.json({ error: e instanceof Error ? e.message : 'خطأ' }, { status: 500 }) }
 }
