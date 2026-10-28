@@ -8,7 +8,7 @@
     "build": "prisma generate && next build",
     "start": "next start -H 127.0.0.1 -p 3000",
     "lint": "eslint .",
-    "db:push": "prisma db push",
+    "db:push": "node scripts/safe-db-setup.mjs",
     "db:generate": "prisma generate",
     "db:reset": "echo \"Refusing automatic database reset. Back up and use an explicit local restore procedure.\" && exit 1",
     "db:setup": "node scripts/safe-db-setup.mjs",
