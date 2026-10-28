@@ -4,7 +4,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { recognizedLineRevenue } from '@/lib/reporting'
 
 const activeSaleStatuses = ['completed', 'partial_return', 'returned']
-const dayKey = (date: Date) => date.toISOString().slice(0, 10)
+const dayKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
 
 export async function GET() {
   const user = await getCurrentUser()
