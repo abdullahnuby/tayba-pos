@@ -1,6 +1,5 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getD1Binding } from '@/lib/d1-atomic'
 import { getCurrentUser } from '@/lib/auth'
 
 export async function GET() {
@@ -29,21 +28,17 @@ export async function GET() {
     where: { date: { gte: startOfToday, lte: endOfToday }, status: 'completed' },
   })
 
-  // Prisma cannot express quantity <= minQuantity/reorderQty here.
-  // D1 SQL compares the two columns directly.
-  const d1 = getD1Binding()
-  if (!d1) throw new Error('لا يوجد اتصال Cloudflare D1')
-
-  const lowStockCountResult = await d1
-    .prepare('SELECT COUNT(*) AS count FROM "ProductVariant" WHERE quantity <= minQuantity')
-    .all<{ count: number }>()
-  const lowStockCount = Number(lowStockCountResult.results?.[0]?.count ?? 0)
-
-  const outOfStockCount = await db.productVariant.count({ where: { quantity: 0 } })
-
   const variants = await db.productVariant.findMany({
-    select: { costPrice: true, sellPrice: true, quantity: true },
+    select: {
+      id: true, sku: true, size: true, color: true, quantity: true,
+      minQuantity: true, reorderQty: true, costPrice: true, sellPrice: true,
+      product: { select: { name: true, category: { select: { name: true } } } },
+    },
   })
+  const lowStockVariants = variants.filter((variant) => variant.quantity <= variant.minQuantity)
+  const reorderVariants = variants.filter((variant) => variant.quantity <= variant.reorderQty)
+  const lowStockCount = lowStockVariants.length
+  const outOfStockCount = variants.filter((variant) => variant.quantity === 0).length
   const inventoryValue = variants.reduce((s, v) => s + v.costPrice * v.quantity, 0)
   const retailValue = variants.reduce((s, v) => s + v.sellPrice * v.quantity, 0)
 
@@ -128,32 +123,23 @@ export async function GET() {
     include: { customer: true, items: true },
   })
 
-  const lowStockListResult = await d1
-    .prepare(`
-      SELECT pv.id, p.name AS name, pv.sku, pv.size, pv.color,
-             pv.quantity, pv.minQuantity, pv.reorderQty,
-             c.name AS category
-      FROM "ProductVariant" pv
-      JOIN "Product" p ON p.id = pv.productId
-      LEFT JOIN "Category" c ON c.id = p.categoryId
-      WHERE pv.quantity <= pv.minQuantity
-      ORDER BY pv.quantity ASC, p.name ASC
-      LIMIT 20
-    `)
-    .all<any>()
-  const lowStockList = lowStockListResult.results || []
+  const lowStockList = lowStockVariants
+    .sort((a, b) => a.quantity - b.quantity || a.product.name.localeCompare(b.product.name))
+    .slice(0, 20)
+    .map((variant) => ({
+      id: variant.id, name: variant.product.name, sku: variant.sku,
+      size: variant.size, color: variant.color, quantity: variant.quantity,
+      minQuantity: variant.minQuantity, reorderQty: variant.reorderQty,
+      category: variant.product.category?.name || 'بدون تصنيف',
+    }))
 
-  const reorderListResult = await d1
-    .prepare(`
-      SELECT pv.id, p.name AS name, pv.sku, pv.quantity, pv.reorderQty
-      FROM "ProductVariant" pv
-      JOIN "Product" p ON p.id = pv.productId
-      WHERE pv.quantity <= pv.reorderQty
-      ORDER BY pv.quantity ASC, p.name ASC
-      LIMIT 10
-    `)
-    .all<any>()
-  const reorderList = reorderListResult.results || []
+  const reorderList = reorderVariants
+    .sort((a, b) => a.quantity - b.quantity || a.product.name.localeCompare(b.product.name))
+    .slice(0, 10)
+    .map((variant) => ({
+      id: variant.id, name: variant.product.name, sku: variant.sku,
+      quantity: variant.quantity, reorderQty: variant.reorderQty,
+    }))
 
   const todaySalesByMethod = await db.sale.findMany({
     where: { date: { gte: startOfToday, lte: endOfToday }, status: 'completed' },
