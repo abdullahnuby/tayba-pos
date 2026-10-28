@@ -8,12 +8,37 @@ export async function GET(req: NextRequest) {
   const auth = await authenticate(req)
   if (auth instanceof Response) return auth
   const customers = await db.customer.findMany({ orderBy: { name: 'asc' }, include: { _count: { select: { sales: true } } } })
-  const result = await Promise.all(customers.map(async c => {
-    const [agg, paidAgg] = await Promise.all([
-      db.sale.aggregate({ where: { customerId: c.id, status: { not: 'voided' } }, _sum: { total: true } }),
-      db.customerPayment.aggregate({ where: { customerId: c.id }, _sum: { amount: true } }),
+  const result = await Promise.all(customers.map(async (customer) => {
+    const [sales, returns, paidAgg] = await Promise.all([
+      db.sale.findMany({
+        where: { customerId: customer.id, status: { in: ['completed', 'partial_return', 'returned'] } },
+        select: {
+          total: true, paid: true, initialPaid: true,
+          customerPayments: { select: { amount: true } },
+        },
+      }),
+      db.saleReturn.findMany({
+        where: { customerId: customer.id, status: 'completed' },
+        select: { total: true, refundAmount: true },
+      }),
+      db.customerPayment.aggregate({
+        where: { customerId: customer.id },
+        _sum: { amount: true },
+      }),
     ])
-    return { ...c, totalPurchases: agg._sum.total || 0, totalPaid: paidAgg._sum.amount || 0 }
+    const grossSales = sales.reduce((sum, sale) => sum + sale.total, 0)
+    const returnTotal = returns.reduce((sum, returned) => sum + returned.total, 0)
+    const originalReceipts = sales.reduce((sum, sale) => {
+      const linkedCollections = sale.customerPayments.reduce((paid, payment) => paid + payment.amount, 0)
+      return sum + (sale.initialPaid ?? Math.max(0, sale.paid - linkedCollections))
+    }, 0)
+    const refunds = returns.reduce((sum, returned) => sum + (returned.refundAmount ?? returned.total), 0)
+    const totalCollected = Math.max(0, originalReceipts + (paidAgg._sum.amount || 0) - refunds)
+    return {
+      ...customer,
+      totalPurchases: Math.round((grossSales - returnTotal + Number.EPSILON) * 100) / 100,
+      totalPaid: Math.round((totalCollected + Number.EPSILON) * 100) / 100,
+    }
   }))
   return NextResponse.json(result)
 }
