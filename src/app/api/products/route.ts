@@ -147,14 +147,6 @@ export async function POST(req: NextRequest) {
       include: { variants: true, category: true, brand: true },
     })
 
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterProduct } = await import('@/lib/sync')
-      await syncAfterProduct()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (product create):', syncErr)
-    }
-
     return NextResponse.json(product, { status: 201 })
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string }
