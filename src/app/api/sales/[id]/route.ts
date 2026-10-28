@@ -10,7 +10,30 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
   const sale = await db.sale.findUnique({ where: { id }, include: { customer: true, user: { select: { name: true, username: true } }, items: { include: { variant: { include: { product: true } } } }, returns: { include: { items: true } }, customerPayments: true } })
   if (!sale) return NextResponse.json({ error: 'الفاتورة غير موجودة' }, { status: 404 })
   if (user.role === 'cashier' && sale.userId !== user.id) return NextResponse.json({ error: 'لا تملك صلاحية هذه الفاتورة' }, { status: 403 })
-  return NextResponse.json(sale)
+  if (user.role === 'cashier') {
+    const safeSale = {
+      ...sale,
+      customer: sale.customer ? {
+        id: sale.customer.id,
+        name: sale.customer.name,
+        phone: sale.customer.phone,
+      } : null,
+      items: sale.items.map((item) => {
+        const safeVariant: Record<string, unknown> = { ...item.variant }
+        delete safeVariant.costPrice
+        delete safeVariant.minQuantity
+        delete safeVariant.reorderQty
+        delete safeVariant.purchaseUnit
+        delete safeVariant.purchaseUnitFactor
+        delete safeVariant.baseUnit
+        return { ...item, variant: safeVariant }
+      }),
+      returns: [],
+      customerPayments: [],
+    }
+    return NextResponse.json(safeSale, { headers: { 'Cache-Control': 'no-store' } })
+  }
+  return NextResponse.json(sale, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
