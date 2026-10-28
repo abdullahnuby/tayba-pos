@@ -148,19 +148,22 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 10)
 })
 
-test('purchase aggregates repeated variant lines before calculating weighted cost', async () => {
-  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
-    payload: {
-      supplierId,
-      items: [
-        { variantId, quantity: 2, unitCost: 7, enteredQuantity: 2, unit: 'piece', unitFactor: 1 },
-        { variantId, quantity: 3, unitCost: 9, enteredQuantity: 3, unit: 'piece', unitFactor: 1 },
-      ],
-      discount: 0,
-      paid: 0,
-      status: 'completed',
-    },
-  })
+test('purchase aggregates repeated variant lines and deduplicates repeated submissions', async () => {
+  const payload = {
+    idempotencyKey: 'ci-purchase-repeat-key',
+    supplierId,
+    items: [
+      { variantId, quantity: 2, unitCost: 7, enteredQuantity: 2, unit: 'piece', unitFactor: 1 },
+      { variantId, quantity: 3, unitCost: 9, enteredQuantity: 3, unit: 'piece', unitFactor: 1 },
+    ],
+    discount: 0,
+    paid: 0,
+    status: 'completed',
+  }
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', { payload })
+  const repeated = await localAtomicAction<any>(db, 'commit_purchase', { payload })
+  assert.equal(purchase.id, repeated.id)
+  assert.equal(await db.purchase.count(), 1)
   purchaseId = purchase.id
   purchaseItemId = purchase.items[0].id
   assert.equal(purchase.items.length, 2)
