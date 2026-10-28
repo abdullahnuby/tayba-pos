@@ -38,7 +38,13 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-# database (dev only)
+# Local SQLite database and sidecar files (never commit live shop data)
+/data/*.db
+/data/*.db-*
+/data/*.sqlite
+/data/*.sqlite-*
+/backups/*
+!/backups/.gitkeep
 /db/*.db
 /db/*.db-journal
 /prisma/db/*.db
