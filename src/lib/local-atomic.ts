@@ -285,6 +285,11 @@ export async function localAtomicAction<T = any>(
 
     case 'commit_purchase': {
       return database.$transaction(async (tx) => {
+        const idempotencyKey = String(input.idempotencyKey || '').trim()
+        if (idempotencyKey) {
+          const existing = await tx.purchase.findUnique({ where: { idempotencyKey }, include: { items: true } })
+          if (existing) return existing
+        }
         const items = Array.isArray(input.items) ? input.items : []
         if (!items.length) throw new Error('فاتورة الشراء يجب أن تحتوي على بند واحد على الأقل')
         const normalized = items.map((item: AnyRecord) => ({
@@ -317,6 +322,7 @@ export async function localAtomicAction<T = any>(
             id: purchaseId,
             invoiceNo: await nextInvoiceNumber(tx, 'purchaseCounter', 'purchaseInvoicePrefix', 'PUR'),
             supplierId: supplier.id,
+            idempotencyKey: idempotencyKey || null,
             date: dateValue(input.date),
             subtotal,
             discount,
