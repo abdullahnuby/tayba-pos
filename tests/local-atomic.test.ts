@@ -223,7 +223,7 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
         items: [{ purchaseItemId, quantity: 2 }],
       },
     }),
-    /يتجاوز الكمية المشتراة/,
+    /تتجاوز الكمية المشتراة/,
   )
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityAfterReturn)
 })
