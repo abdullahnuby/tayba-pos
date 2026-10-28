@@ -163,8 +163,8 @@ export function SalesSection({ user }: { user: SessionUser }) {
   function quickPay(m: 'cash' | 'card' | 'transfer' | 'credit') { setPaymentMethod(m); setPaid(m === 'credit' ? 0 : total) }
 
   function submit() {
-    if (pricingSettingsQuery.isLoading || !pricingSettingsQuery.data) return toast.error('جاري تحميل إعدادات الضريبة؛ حاول بعد اكتمال التحميل')
     if (pricingSettingsQuery.isError) return toast.error('تعذر تحميل إعدادات الضريبة؛ لم يتم حفظ الفاتورة')
+    if (pricingSettingsQuery.isLoading || !pricingSettingsQuery.data) return toast.error('جاري تحميل إعدادات الضريبة؛ حاول بعد اكتمال التحميل')
     if (!cart.length) return toast.error('أضف صنفًا أولًا')
     if (discountAmount > subtotal) return toast.error('الخصم أكبر من الإجمالي')
     if (paymentMethod === 'credit' && !customerId) return toast.error('اختر العميل للبيع الآجل')
