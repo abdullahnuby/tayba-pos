@@ -68,9 +68,8 @@ export async function POST(req: NextRequest) {
       ['receiptFooter', 'شكراً لزيارتكم'],
     ] as const
 
-    // Cloudflare D1 doesn't support interactive transactions — build every
-    // operation up front (user create + each setting upsert) and run them
-    // together as one batch transaction.
+    // Create the administrator and initial settings together. SQLite's
+    // transaction keeps first-run setup all-or-nothing.
     const [admin] = await db.$transaction([
       db.user.create({
         data: {
