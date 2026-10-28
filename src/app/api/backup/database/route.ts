@@ -96,8 +96,8 @@ export async function POST(_req: NextRequest) {
 
     await auditLog({
       user: auth.user,
-      action: 'backup',
-      entity: 'database',
+      action: 'create',
+      entity: 'database-backup',
       after: { filename, sizeBytes: details.size },
     }).catch(() => undefined)
 
