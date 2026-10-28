@@ -473,9 +473,15 @@ export async function localAtomicAction<T = any>(
         }
         const baseSubtotal = normalized.reduce((sum, item) => sum + item.purchaseItem.unitCost * item.quantity, 0)
         const returnTotal = purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0
-        const refundAmount = input.refundAmount == null ? returnTotal : numeric(input.refundAmount, -1)
+        const refundMethod = String(input.refundMethod || 'credit')
+        const refundAmount = input.refundAmount == null
+          ? (refundMethod === 'credit' ? 0 : returnTotal)
+          : numeric(input.refundAmount, -1)
         if (!Number.isFinite(refundAmount) || refundAmount < 0 || refundAmount > returnTotal + 0.001) {
           throw new Error('قيمة الاسترداد غير صحيحة')
+        }
+        if (refundMethod === 'credit' && refundAmount > 0.001) {
+          throw new Error('المرتجع على رصيد المورد لا يسجل مبلغًا مستردًا نقديًا')
         }
         const quantities = new Map<string, number>()
         for (const item of normalized) quantities.set(item.purchaseItem.variantId, (quantities.get(item.purchaseItem.variantId) || 0) + item.quantity)
@@ -495,7 +501,7 @@ export async function localAtomicAction<T = any>(
             reason: input.reason || null,
             notes: input.notes || null,
             status: 'completed',
-            refundMethod: input.refundMethod || 'credit',
+            refundMethod,
             refundAmount,
             idempotencyKey: idempotencyKey || null,
             items: {
