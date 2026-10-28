@@ -10,6 +10,11 @@ function numeric(value: unknown, fallback = 0): number {
   return Number.isFinite(parsed) ? parsed : fallback
 }
 
+function money(value: unknown): number {
+  const parsed = numeric(value)
+  return Math.round((parsed + Number.EPSILON) * 100) / 100
+}
+
 function requiredPositiveInt(value: unknown, label: string): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
@@ -116,7 +121,7 @@ export async function localAtomicAction<T = any>(
         const normalized = items.map((item: AnyRecord) => ({
           variantId: String(item.variantId || ''),
           quantity: requiredPositiveInt(item.quantity, 'الكمية'),
-          unitPrice: numeric(item.unitPrice, -1),
+          unitPrice: money(numeric(item.unitPrice, -1)),
         }))
         if (normalized.some((item) => !item.variantId || item.unitPrice < 0)) {
           throw new Error('بيانات المنتجات أو الأسعار غير صحيحة')
@@ -139,16 +144,16 @@ export async function localAtomicAction<T = any>(
           }
         }
 
-        const subtotal = normalized.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
-        const discount = numeric(input.discount)
+        const subtotal = money(normalized.reduce((sum, item) => sum + money(item.unitPrice * item.quantity), 0))
+        const discount = money(input.discount)
         if (discount < 0 || discount > subtotal) throw new Error('قيمة الخصم غير صحيحة')
         const tax = await taxSettings(tx)
-        const taxable = Math.max(0, subtotal - discount)
-        const taxAmount = tax.enabled
+        const taxable = money(Math.max(0, subtotal - discount))
+        const taxAmount = money(tax.enabled
           ? (tax.inclusive ? taxable - taxable / (1 + tax.rate / 100) : taxable * tax.rate / 100)
-          : 0
-        const total = tax.enabled && tax.inclusive ? taxable : taxable + taxAmount
-        const paid = numeric(input.paid)
+          : 0)
+        const total = money(tax.enabled && tax.inclusive ? taxable : taxable + taxAmount)
+        const paid = money(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
         const paymentMethod = String(input.paymentMethod || 'cash')
         if (paid > total + 0.001 && paymentMethod !== 'cash') {
@@ -176,7 +181,7 @@ export async function localAtomicAction<T = any>(
             total,
             paid: Math.min(paid, total),
             initialPaid: Math.min(paid, total),
-            change: Math.max(0, paid - total),
+            change: money(Math.max(0, paid - total)),
             paymentMethod,
             status,
             notes: input.notes || null,
@@ -188,7 +193,7 @@ export async function localAtomicAction<T = any>(
                 quantity: item.quantity,
                 unitPrice: item.unitPrice,
                 unitCost: (variantMap.get(item.variantId) as AnyRecord).costPrice,
-                total: item.unitPrice * item.quantity,
+                total: money(item.unitPrice * item.quantity),
               })),
             },
           },
@@ -197,7 +202,7 @@ export async function localAtomicAction<T = any>(
 
         if (status === 'completed') {
           for (const [variantId, quantity] of totals) await updateStock(tx, variantId, -quantity)
-          const due = Math.max(0, total - Math.min(paid, total))
+          const due = money(Math.max(0, total - Math.min(paid, total)))
           if (input.customerId && due > 0) {
             await tx.customer.update({ where: { id: input.customerId }, data: { balance: { increment: due }, updatedAt: new Date() } })
           }
@@ -248,18 +253,18 @@ export async function localAtomicAction<T = any>(
           }
         }
 
-        const baseSubtotal = normalized.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+        const baseSubtotal = money(normalized.reduce((sum, item) => sum + money(item.unitPrice * item.quantity), 0))
         const originalSubtotal = numeric(sale.subtotal)
-        const total = originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0
+        const total = money(originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0)
         const priorReturnTotal = sale.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
-        const outstandingBeforeReturn = Math.max(0, numeric(sale.total) - numeric(sale.paid) - priorReturnTotal)
-        const balanceOffset = sale.customerId ? Math.min(total, outstandingBeforeReturn) : 0
+        const outstandingBeforeReturn = money(Math.max(0, numeric(sale.total) - numeric(sale.paid) - priorReturnTotal))
+        const balanceOffset = money(sale.customerId ? Math.min(total, outstandingBeforeReturn) : 0)
         const refundMethod = String(input.refundMethod || 'cash')
         if (refundMethod === 'credit' && !sale.customerId) {
           throw new Error('لا يمكن إضافة رصيد مرتجع من دون ربط الفاتورة بعميل')
         }
-        const refundAmount = refundMethod === 'credit' ? 0 : Math.max(0, total - balanceOffset)
-        const balanceReduction = refundMethod === 'credit' ? total : balanceOffset
+        const refundAmount = money(refundMethod === 'credit' ? 0 : Math.max(0, total - balanceOffset))
+        const balanceReduction = money(refundMethod === 'credit' ? total : balanceOffset)
         const allReturned = sale.items.every((saleItem: AnyRecord) => {
           const previous = alreadyReturned.get(saleItem.id) || 0
           const additional = normalized.filter((item) => item.saleItem.id === saleItem.id).reduce((sum, item) => sum + item.quantity, 0)
@@ -320,7 +325,7 @@ export async function localAtomicAction<T = any>(
         const normalized = items.map((item: AnyRecord) => ({
           variantId: String(item.variantId || ''),
           quantity: requiredPositiveInt(item.quantity, 'الكمية'),
-          unitCost: numeric(item.unitCost, -1),
+          unitCost: money(numeric(item.unitCost, -1)),
           enteredQuantity: numeric(item.enteredQuantity, numeric(item.quantity)),
           unit: String(item.unit || 'piece'),
           unitFactor: Math.max(1, Math.trunc(numeric(item.unitFactor, 1))),
@@ -332,15 +337,15 @@ export async function localAtomicAction<T = any>(
         const variants = await tx.productVariant.findMany({ where: { id: { in: variantIds } } })
         if (variants.length !== variantIds.length) throw new Error('بعض المنتجات غير موجودة')
         const tax = await taxSettings(tx)
-        const subtotal = normalized.reduce((sum, item) => sum + item.unitCost * item.quantity, 0)
-        const discount = numeric(input.discount)
+        const subtotal = money(normalized.reduce((sum, item) => sum + money(item.unitCost * item.quantity), 0))
+        const discount = money(input.discount)
         if (discount < 0 || discount > subtotal) throw new Error('قيمة الخصم غير صحيحة')
-        const taxable = Math.max(0, subtotal - discount)
-        const taxAmount = tax.enabled
+        const taxable = money(Math.max(0, subtotal - discount))
+        const taxAmount = money(tax.enabled
           ? (tax.inclusive ? taxable - taxable / (1 + tax.rate / 100) : taxable * tax.rate / 100)
-          : 0
-        const total = tax.enabled && tax.inclusive ? taxable : taxable + taxAmount
-        const paid = numeric(input.paid)
+          : 0)
+        const total = money(tax.enabled && tax.inclusive ? taxable : taxable + taxAmount)
+        const paid = money(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
         if (paid > total + 0.001) throw new Error('المبلغ المدفوع للمورد يتجاوز إجمالي فاتورة الشراء')
 
@@ -369,7 +374,7 @@ export async function localAtomicAction<T = any>(
                 variantId: item.variantId,
                 quantity: item.quantity,
                 unitCost: item.unitCost,
-                total: item.unitCost * item.quantity,
+                total: money(item.unitCost * item.quantity),
                 enteredQuantity: item.enteredQuantity,
                 unit: item.unit,
                 unitFactor: item.unitFactor,
@@ -396,7 +401,7 @@ export async function localAtomicAction<T = any>(
               data: { quantity: nextQty, costPrice: nextCost, updatedAt: new Date() },
             })
           }
-          const due = Math.max(0, total - Math.min(paid, total))
+          const due = money(Math.max(0, total - Math.min(paid, total)))
           if (due > 0) await tx.supplier.update({ where: { id: supplier.id }, data: { balance: { increment: due }, updatedAt: new Date() } })
         }
         return created
@@ -483,17 +488,17 @@ export async function localAtomicAction<T = any>(
           const purchased = purchasedByVariant.get(variantId) || 0
           if (already + quantity > purchased) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة')
         }
-        const baseSubtotal = normalized.reduce((sum, item) => sum + item.purchaseItem.unitCost * item.quantity, 0)
-        const returnTotal = purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0
+        const baseSubtotal = money(normalized.reduce((sum, item) => sum + money(item.purchaseItem.unitCost * item.quantity), 0))
+        const returnTotal = money(purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0)
         const refundMethod = String(input.refundMethod || 'credit')
         const priorReturnTotal = purchase.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
-        const outstandingBeforeReturn = Math.max(0, numeric(purchase.total) - numeric(purchase.paid) - priorReturnTotal)
+        const outstandingBeforeReturn = money(Math.max(0, numeric(purchase.total) - numeric(purchase.paid) - priorReturnTotal))
         const maximumCashRefund = refundMethod === 'credit'
           ? 0
-          : Math.max(0, returnTotal - Math.min(returnTotal, outstandingBeforeReturn))
+          : money(Math.max(0, returnTotal - Math.min(returnTotal, outstandingBeforeReturn)))
         const refundAmount = input.refundAmount == null
           ? maximumCashRefund
-          : numeric(input.refundAmount, -1)
+          : money(numeric(input.refundAmount, -1))
         if (!Number.isFinite(refundAmount) || refundAmount < 0 || refundAmount > maximumCashRefund + 0.001) {
           throw new Error('قيمة الاسترداد تتجاوز المبلغ المدفوع للمورد؛ يجب خصم المستحق أولًا')
         }
@@ -555,7 +560,7 @@ export async function localAtomicAction<T = any>(
           }
         }
         for (const item of sale.items) await updateStock(tx, item.variantId, item.quantity)
-        const due = Math.max(0, numeric(sale.total) - numeric(sale.paid))
+        const due = money(Math.max(0, numeric(sale.total) - numeric(sale.paid)))
         if (sale.customerId && due > 0) {
           await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { decrement: due }, updatedAt: new Date() } })
         }
@@ -568,7 +573,7 @@ export async function localAtomicAction<T = any>(
         const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (sale.status !== 'draft') throw new Error('يمكن استئناف الفواتير المسودة فقط')
-        const remainingDue = Math.max(0, numeric(sale.total) - numeric(sale.paid))
+        const remainingDue = money(Math.max(0, numeric(sale.total) - numeric(sale.paid)))
         if (remainingDue > 0.001 && !sale.customerId) {
           throw new Error('لا يمكن استئناف فاتورة عليها مبلغ متبقٍ من دون ربطها بعميل')
         }
@@ -713,7 +718,7 @@ export async function localAtomicAction<T = any>(
           if (!variant || variant.quantity < quantity) throw new Error('المخزون الحالي لا يسمح بإلغاء فاتورة الشراء')
         }
         for (const [variantId, quantity] of totals) await updateStock(tx, variantId, -quantity)
-        const due = Math.max(0, numeric(purchase.total) - numeric(purchase.paid))
+        const due = money(Math.max(0, numeric(purchase.total) - numeric(purchase.paid)))
         if (due > 0) await tx.supplier.update({ where: { id: purchase.supplierId }, data: { balance: { decrement: due }, updatedAt: new Date() } })
         return tx.purchase.update({
           where: { id: purchase.id },
