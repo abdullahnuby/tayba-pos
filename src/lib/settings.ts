@@ -70,7 +70,7 @@ export async function getAllSettings(): Promise<Record<string, string>> {
 
 /**
  * Atomic counter — MUST be called inside a transaction to be truly atomic.
- * Uses an Apps Script/Sheets upsert under the script write lock.
+ * Uses SQLite upsert inside the caller's Prisma transaction.
  * Returns the next invoice number with prefix.
  */
 export async function nextInvoiceNumber(
