@@ -45,7 +45,7 @@ export async function GET(req: NextRequest) {
   const requestedType = (url.searchParams.get('type') || 'all').trim()
   const rawPage = Number(url.searchParams.get('page') || '1')
   const rawPageSize = Number(url.searchParams.get('pageSize') || '100')
-  const page = Math.min(1000, Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1))
+  const page = Math.min(100, Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1))
   const pageSize = Math.min(100, Math.max(1, Number.isFinite(rawPageSize) ? Math.floor(rawPageSize) : 100))
   const take = page * pageSize
 
