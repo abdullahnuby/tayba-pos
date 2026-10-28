@@ -36,18 +36,11 @@ function createPrismaClient(): PrismaClient {
 }
 
 const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
-export const db: any = globalForPrisma.prisma ?? createPrismaClient()
+export const db: PrismaClient = globalForPrisma.prisma ?? createPrismaClient()
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = db
 }
-
-// Legacy helpers use this non-model metadata to render stock thresholds.
-Object.defineProperty(db.productVariant, 'fields', {
-  value: { minQuantity: 'minQuantity', reorderQty: 'reorderQty' },
-  enumerable: false,
-  configurable: true,
-})
 
 export async function atomicAction<T = any>(
   action: string,
