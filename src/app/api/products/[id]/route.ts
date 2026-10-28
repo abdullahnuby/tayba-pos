@@ -145,14 +145,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // The product.update was pushed last, so its result is the last element.
     const updated = results[results.length - 1]
 
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterProduct } = await import('@/lib/sync')
-      await syncAfterProduct()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (product update):', syncErr)
-    }
-
     return NextResponse.json(updated)
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string }
@@ -180,14 +172,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       )
     }
     await db.product.delete({ where: { id } })
-
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterProduct } = await import('@/lib/sync')
-      await syncAfterProduct()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (product delete):', syncErr)
-    }
 
     return NextResponse.json({ success: true })
   } catch (e: unknown) {
