@@ -30,8 +30,15 @@ jobs:
         run: npx prisma validate
       - name: Generate Prisma client
         run: npx prisma generate
-      - name: Prepare empty test database
-        run: npm run db:setup
+      - name: Prepare isolated test database
+        run: |
+          mkdir -p data
+          DATABASE_URL=file:../data/tayba-test.db npx prisma db push --skip-generate
+      - name: Test core transactional behavior
+        env:
+          DATABASE_URL: file:../data/tayba-test.db
+          ALLOW_TAYBA_TEST_DATABASE: "1"
+        run: npm run test:atomic
       - name: TypeScript check
         run: npx tsc --noEmit
       - name: Lint
