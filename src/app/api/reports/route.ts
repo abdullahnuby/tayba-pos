@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
+import { recognizedLineRevenue, recognizedSaleRevenue } from '@/lib/reporting'
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
 const dayKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
@@ -43,6 +44,7 @@ export async function GET(req: NextRequest) {
       where: { date: { gte: start, lte: end }, status: 'completed' },
       include: {
         sale: { select: { paymentMethod: true } },
+        sale: { select: { subtotal: true, total: true, taxAmount: true, paymentMethod: true } },
         items: {
           include: {
             saleItem: true,
@@ -63,10 +65,16 @@ export async function GET(req: NextRequest) {
   const netSales = totalSales - totalReturns
   const netPurchases = totalPurchases - totalPurchaseReturns
 
+  const recognizedSales = sales.reduce((sum, sale) => sum + recognizedSaleRevenue(sale), 0)
+  const recognizedReturns = returns.reduce((sum, returned) => (
+    sum + returned.items.reduce((lineSum, item) => lineSum + recognizedLineRevenue(returned.sale, item), 0)
+  ), 0)
+  const recognizedNetSales = recognizedSales - recognizedReturns
+
   const soldCost = sales.reduce((sum, sale) => sum + sale.items.reduce((sub, item) => sub + item.unitCost * item.quantity, 0), 0)
   const returnedCost = returns.reduce((sum, returned) => sum + returned.items.reduce((sub, item) => sub + item.saleItem.unitCost * item.quantity, 0), 0)
   const cogs = soldCost - returnedCost
-  const totalProfit = netSales - cogs
+  const totalProfit = recognizedNetSales - cogs
 
   const best = new Map<string, { id: string; name: string; qty: number; revenue: number; profit: number }>()
   const categories = new Map<string, number>()
@@ -79,23 +87,23 @@ export async function GET(req: NextRequest) {
       const row = best.get(item.variantId) || {
         id: item.variantId, name: item.variant.product.name, qty: 0, revenue: 0, profit: 0,
       }
+      const lineRevenue = recognizedLineRevenue(sale, item)
       row.qty += item.quantity
-      row.revenue += item.total
-      row.profit += item.total - cost
+      row.revenue += lineRevenue
+      row.profit += lineRevenue - cost
       best.set(item.variantId, row)
       const category = item.variant.product.category?.name || 'بدون تصنيف'
-      categories.set(category, (categories.get(category) || 0) + item.total)
+      categories.set(category, (categories.get(category) || 0) + lineRevenue)
     }
   }
 
   for (const returned of returns) {
-    const ratio = returned.subtotal > 0 ? returned.total / returned.subtotal : 0
     methods.set(returned.sale.paymentMethod, (methods.get(returned.sale.paymentMethod) || 0) - returned.total)
     for (const item of returned.items) {
       const row = best.get(item.variantId) || {
         id: item.variantId, name: item.variant.product.name, qty: 0, revenue: 0, profit: 0,
       }
-      const refundedRevenue = item.total * ratio
+      const refundedRevenue = recognizedLineRevenue(returned.sale, item)
       const costReturned = item.saleItem.unitCost * item.quantity
       row.qty -= item.quantity
       row.revenue -= refundedRevenue
@@ -128,7 +136,7 @@ export async function GET(req: NextRequest) {
     const row = daily.get(dayKey(returned.date))
     if (row) {
       row.returns += returned.total
-      row.profit += returned.items.reduce((sum, item) => sum + item.saleItem.unitCost * item.quantity, 0) - returned.total
+      row.profit += returned.items.reduce((sum, item) => sum + item.saleItem.unitCost * item.quantity - recognizedLineRevenue(returned.sale, item), 0)
     }
   }
   for (const returned of purchaseReturns) {
@@ -145,13 +153,16 @@ export async function GET(req: NextRequest) {
     purchaseReturnsCount: purchaseReturns.length,
     totalSales: money(totalSales),
     netSales: money(netSales),
+    recognizedSales: money(recognizedSales),
+    recognizedReturns: money(recognizedReturns),
+    recognizedNetSales: money(recognizedNetSales),
     totalReturns: money(totalReturns),
     totalPurchases: money(totalPurchases),
     totalPurchaseReturns: money(totalPurchaseReturns),
     netPurchases: money(netPurchases),
     totalProfit: money(totalProfit),
     cogs: money(cogs),
-    profitMargin: netSales > 0 ? money((totalProfit / netSales) * 100) : 0,
+    profitMargin: recognizedNetSales > 0 ? money((totalProfit / recognizedNetSales) * 100) : 0,
     bestSelling: Array.from(best.values()).sort((a, b) => b.qty - a.qty).slice(0, 10).map((row) => ({
       ...row, revenue: money(row.revenue), profit: money(row.profit),
     })),
