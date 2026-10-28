@@ -39,7 +39,7 @@ const patchSchema = z.object({
 )
 
 export async function GET(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticate(req, { skipRateLimit: true })
+  const auth = await authenticate(req, { roles: ['admin', 'manager'], skipRateLimit: true })
   if (auth instanceof Response) return auth
 
   const { id } = await _ctx.params
