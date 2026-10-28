@@ -694,6 +694,56 @@ test('voiding an unpaid credit sale restores stock and removes recorded customer
   assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, beforeVoidBalance)
 })
 
+test('cashier sale transaction refuses to write after its register shift has closed', async () => {
+  const cashier = await db.user.create({
+    data: {
+      username: 'ci-shift-cashier',
+      passwordHash: 'test-only-hash',
+      name: 'CI Shift Cashier',
+      role: 'cashier',
+    },
+  })
+  const session = await db.registerSession.create({
+    data: { userId: cashier.id, openingFloat: 0, status: 'open' },
+  })
+  const firstSale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      userId: cashier.id,
+      requiresOpenShift: true,
+      idempotencyKey: 'ci-open-shift-sale',
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 10,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  assert.ok(firstSale.id)
+  await db.registerSession.update({
+    where: { id: session.id },
+    data: { status: 'closed', closedAt: new Date(), closingFloat: 10, expectedCash: 10, difference: 0 },
+  })
+  const salesCountBeforeRetry = await db.sale.count()
+  const stockBeforeRetry = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  await assert.rejects(
+    localAtomicAction(db, 'commit_sale', {
+      payload: {
+        userId: cashier.id,
+        requiresOpenShift: true,
+        idempotencyKey: 'ci-closed-shift-sale',
+        items: [{ variantId, quantity: 1, unitPrice: 10 }],
+        discount: 0,
+        paid: 10,
+        paymentMethod: 'cash',
+        status: 'completed',
+      },
+    }),
+    /الوردية اتقفلت قبل تسجيل الفاتورة/,
+  )
+  assert.equal(await db.sale.count(), salesCountBeforeRetry)
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, stockBeforeRetry)
+})
+
 test('SQLite backup snapshot passes integrity check and can be opened independently', async () => {
   const backupPath = resolve(process.cwd(), 'data', 'tayba-test-snapshot.db')
   await unlink(backupPath).catch(() => undefined)
