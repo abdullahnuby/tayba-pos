@@ -14,6 +14,7 @@ const purchaseItemSchema = z.object({
 })
 
 const purchaseSchema = z.object({
+  idempotencyKey: z.string().min(8).max(120).optional(),
   supplierId: z.string().min(1),
   date: z.string().optional(),
   discount: z.number().min(0).default(0),
@@ -71,6 +72,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
     }
     const data = parsed.data
+    const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 120)) {
+      return NextResponse.json({ error: 'مفتاح منع التكرار يجب أن يكون بين 8 و120 حرفًا' }, { status: 400 })
+    }
+    const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
 
     // UI may submit commercial purchase units (e.g. 5 dozen).
     // Persist inventory in the base unit while keeping entered unit metadata.
@@ -118,6 +124,7 @@ export async function POST(req: NextRequest) {
     }>('commit_purchase', {
       payload: {
         supplierId: data.supplierId,
+        idempotencyKey,
         date: data.date || new Date().toISOString(),
         discount: data.discount,
         paid: data.paid,
