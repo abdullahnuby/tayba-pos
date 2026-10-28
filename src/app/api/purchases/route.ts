@@ -19,7 +19,7 @@ const purchaseSchema = z.object({
   date: z.string().optional(),
   discount: z.number().min(0).default(0),
   paid: z.number().min(0).default(0),
-  paymentMethod: z.string().default('cash'),
+  paymentMethod: z.enum(['cash', 'card', 'transfer', 'credit']).default('cash'),
   notes: z.string().optional().nullable(),
   status: z.enum(['draft', 'completed']).default('completed'),
   items: z.array(purchaseItemSchema).min(1, 'الفاتورة يجب أن تحتوي على بند واحد على الأقل'),
@@ -124,6 +124,7 @@ export async function POST(req: NextRequest) {
     }>('commit_purchase', {
       payload: {
         supplierId: data.supplierId,
+        userId: user.id,
         idempotencyKey,
         date: data.date || new Date().toISOString(),
         discount: data.discount,
