@@ -3,8 +3,9 @@
  * Caches reads but supports an in-transaction variant.
  */
 import { db } from './db'
+import type { Prisma } from '@prisma/client'
 
-type Tx = Parameters<Parameters<typeof db['$transaction']>[0]>[0]
+type Tx = Prisma.TransactionClient
 
 const cache = new Map<string, string>()
 
