@@ -63,11 +63,16 @@ export async function POST(req: NextRequest) {
       if (data.saleId) {
         const sale = await tx.sale.findUnique({
           where: { id: data.saleId },
-          select: { id: true, customerId: true, total: true, paid: true, status: true },
+          select: {
+            id: true, customerId: true, total: true, paid: true, status: true,
+            returns: { where: { status: 'completed' }, select: { total: true } },
+          },
         })
         if (!sale || sale.customerId !== data.customerId) throw new Error('الفاتورة لا تخص هذا العميل')
         if (!['completed', 'partial_return'].includes(sale.status)) throw new Error('لا يمكن تحصيل مبلغ على هذه الفاتورة')
-        if (data.amount > Math.max(0, sale.total - sale.paid) + 0.001) throw new Error('المبلغ يتجاوز المتبقي على الفاتورة')
+        const netReturned = sale.returns.reduce((sum: number, returned: { total: number }) => sum + returned.total, 0)
+        const outstanding = Math.max(0, sale.total - sale.paid - netReturned)
+        if (data.amount > outstanding + 0.001) throw new Error('المبلغ يتجاوز المتبقي على الفاتورة بعد خصم المرتجعات')
       }
 
       const deducted = await tx.customer.updateMany({
