@@ -14,6 +14,10 @@ const paymentSchema = z.object({
 })
 
 export async function GET(req: NextRequest) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية عرض مدفوعات الموردين' }, { status: 403 })
+
   const url = new URL(req.url)
   const supplierId = url.searchParams.get('supplierId')
   const where = supplierId ? { supplierId } : {}
