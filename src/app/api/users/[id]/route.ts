@@ -75,6 +75,16 @@ export async function PATCH(
       return NextResponse.json({ error: 'لا يوجد تعديل' }, { status: 400 })
     }
 
+    const removingActiveAdmin = target.role === 'admin' && target.active && (
+      (typeof data.role === 'string' && data.role !== 'admin') || data.active === false
+    )
+    if (removingActiveAdmin) {
+      const activeAdminCount = await db.user.count({ where: { role: 'admin', active: true } })
+      if (activeAdminCount <= 1) {
+        return NextResponse.json({ error: 'لا يمكن تعطيل أو تغيير صلاحية آخر مدير نشط في النظام' }, { status: 409 })
+      }
+    }
+
     const updated = await db.user.update({
       where: { id },
       data,
@@ -116,6 +126,13 @@ export async function DELETE(
     const target = await db.user.findUnique({ where: { id } })
     if (!target) {
       return NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+    }
+
+    if (target.role === 'admin' && target.active) {
+      const activeAdminCount = await db.user.count({ where: { role: 'admin', active: true } })
+      if (activeAdminCount <= 1) {
+        return NextResponse.json({ error: 'لا يمكن حذف آخر مدير نشط في النظام' }, { status: 409 })
+      }
     }
 
     await db.user.delete({ where: { id } })
