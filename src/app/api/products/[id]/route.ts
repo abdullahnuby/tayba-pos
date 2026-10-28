@@ -100,6 +100,25 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const incomingIds = new Set(variants.filter((v) => v.id).map((v) => v.id as string))
       const toDelete = [...existingIds].filter((vid) => !incomingIds.has(vid))
       if (toDelete.length) {
+        const variantWhere = { variantId: { in: toDelete } }
+        const [
+          saleReferences,
+          purchaseReferences,
+          saleReturnReferences,
+          purchaseReturnReferences,
+          adjustmentReferences,
+        ] = await Promise.all([
+          db.saleItem.count({ where: variantWhere }),
+          db.purchaseItem.count({ where: variantWhere }),
+          db.saleReturnItem.count({ where: variantWhere }),
+          db.purchaseReturnItem.count({ where: variantWhere }),
+          db.stockAdjustment.count({ where: variantWhere }),
+        ])
+        if (saleReferences + purchaseReferences + saleReturnReferences + purchaseReturnReferences + adjustmentReferences > 0) {
+          return NextResponse.json({
+            error: 'لا يمكن حذف مقاس/لون مرتبط بفواتير أو مرتجعات أو حركات مخزون سابقة. احتفظ به في المنتج بدلًا من حذف تاريخه.',
+          }, { status: 409 })
+        }
         ops.push(db.productVariant.deleteMany({ where: { id: { in: toDelete } } }))
       }
       for (const v of variants) {
