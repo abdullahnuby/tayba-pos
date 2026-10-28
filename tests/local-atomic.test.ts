@@ -295,6 +295,50 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityAfterReturn)
 })
 
+test('voiding an unpaid purchase reverses its inventory and supplier balance atomically', async () => {
+  const beforeQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  const beforeSupplierBalance = (await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      idempotencyKey: 'ci-unpaid-purchase-void',
+      supplierId,
+      items: [{ variantId, quantity: 1, unitCost: 10, enteredQuantity: 1, unit: 'piece', unitFactor: 1 }],
+      discount: 0,
+      paid: 0,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity + 1)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, beforeSupplierBalance + 10)
+
+  const voided = await localAtomicAction<any>(db, 'void_purchase', { payload: { purchaseId: purchase.id, voidReason: 'CI unpaid reversal' } })
+  assert.equal(voided.status, 'voided')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, beforeSupplierBalance)
+})
+
+test('voiding a paid purchase is blocked rather than leaving an unrecorded cash refund', async () => {
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      idempotencyKey: 'ci-paid-purchase-void',
+      supplierId,
+      items: [{ variantId, quantity: 1, unitCost: 12, enteredQuantity: 1, unit: 'piece', unitFactor: 1 }],
+      discount: 0,
+      paid: 12,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  const quantityBeforeVoid = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  await assert.rejects(
+    localAtomicAction(db, 'void_purchase', { payload: { purchaseId: purchase.id, voidReason: 'CI paid reversal' } }),
+    /لا يمكن إلغاء فاتورة شراء عليها مرتجع أو دفعات/,
+  )
+  assert.equal((await db.purchase.findUniqueOrThrow({ where: { id: purchase.id } })).status, 'completed')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityBeforeVoid)
+})
+
 test('repeated bulk inventory requests with the same key apply only once', async () => {
   const before = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
   const payload = {
