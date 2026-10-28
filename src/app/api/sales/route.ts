@@ -12,7 +12,9 @@ function sanitizeCashierSale(sale: any) {
     ...sale,
     customer: sale.customer ? { id: sale.customer.id, name: sale.customer.name, phone: sale.customer.phone } : null,
     items: Array.isArray(sale.items) ? sale.items.map((item: any) => {
-      if (!item.variant) return item
+      const safeItem: Record<string, any> = { ...item }
+      delete safeItem.unitCost
+      if (!item.variant) return safeItem
       const safeVariant: Record<string, unknown> = { ...item.variant }
       delete safeVariant.costPrice
       delete safeVariant.minQuantity
@@ -20,7 +22,7 @@ function sanitizeCashierSale(sale: any) {
       delete safeVariant.purchaseUnit
       delete safeVariant.purchaseUnitFactor
       delete safeVariant.baseUnit
-      return { ...item, variant: safeVariant }
+      return { ...safeItem, variant: safeVariant }
     }) : sale.items,
   }
 }
@@ -42,26 +44,7 @@ export async function GET(req: NextRequest) {
   if (status && status !== 'all') where.status = status
   if (search) where.OR = [{ invoiceNo: { contains: search } }, { customer: { name: { contains: search } } }]
   const [sales, total] = await Promise.all([db.sale.findMany({ where, include: { customer: true, items: { include: { variant: { include: { product: true } } } } }, orderBy: { date: 'desc' }, skip: (page - 1) * pageSize, take: pageSize }), db.sale.count({ where })])
-  const items = user.role === 'cashier'
-    ? sales.map((sale) => ({
-        ...sale,
-        customer: sale.customer ? {
-          id: sale.customer.id,
-          name: sale.customer.name,
-          phone: sale.customer.phone,
-        } : null,
-        items: sale.items.map((item) => {
-          const safeVariant: Record<string, unknown> = { ...item.variant }
-          delete safeVariant.costPrice
-          delete safeVariant.minQuantity
-          delete safeVariant.reorderQty
-          delete safeVariant.purchaseUnit
-          delete safeVariant.purchaseUnitFactor
-          delete safeVariant.baseUnit
-          return { ...item, variant: safeVariant }
-        }),
-      }))
-    : sales
+  const items = user.role === 'cashier' ? sales.map(sanitizeCashierSale) : sales
 
   return NextResponse.json({ items, total, page, pageSize }, { headers: { 'Cache-Control': 'no-store' } })
 }
