@@ -2,9 +2,9 @@
  * Authentication helpers — password hashing + verification.
  * Uses Node built-in crypto (no external deps).
  *
- * Cloudflare/Vinext compatible:
+ * Local Node.js authentication:
  * - AUTH_SECRET is read lazily at runtime.
- * - No top-level process.env.AUTH_SECRET evaluation.
+ * - No top-level environment access is required while importing the module.
  */
 
 import * as crypto from 'crypto'
