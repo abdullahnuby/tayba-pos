@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
 
   const [
     categories, brands, suppliers, customers, products, variants,
-    purchases, purchaseItems, sales, saleItems,
+    purchases, purchaseItems, purchaseReturns, purchaseReturnItems, sales, saleItems,
     saleReturns, saleReturnItems,
     customerPayments, supplierPayments,
     stockAdjustments, registerSessions, auditLogs,
@@ -25,16 +25,18 @@ export async function GET(req: NextRequest) {
     db.productVariant.findMany({ include: { product: true } }),
     db.purchase.findMany({ include: { supplier: true } }),
     db.purchaseItem.findMany({ include: { variant: { include: { product: true } }, purchase: { select: { invoiceNo: true } } } }),
+    db.purchaseReturn.findMany({ include: { purchase: { select: { invoiceNo: true } }, supplier: { select: { name: true } }, user: { select: { name: true } } } }),
+    db.purchaseReturnItem.findMany({ include: { variant: { include: { product: true } }, purchaseReturn: { select: { returnNo: true } }, purchaseItem: { select: { id: true } } } }),
     db.sale.findMany({ include: { customer: true, user: { select: { name: true } } } }),
     db.saleItem.findMany({ include: { variant: { include: { product: true } }, sale: { select: { invoiceNo: true } } } }),
-    db.saleReturn.findMany({ include: { sale: { select: { invoiceNo: true } }, customer: true } }),
+    db.saleReturn.findMany({ include: { sale: { select: { invoiceNo: true } }, customer: true, user: { select: { name: true } } } }),
     db.saleReturnItem.findMany({ include: { variant: { include: { product: true } }, saleReturn: { select: { returnNo: true } } } }),
-    db.customerPayment.findMany({ include: { customer: { select: { name: true } }, sale: { select: { invoiceNo: true } } } }),
+    db.customerPayment.findMany({ include: { customer: { select: { name: true } }, sale: { select: { invoiceNo: true } }, user: { select: { name: true } } } }),
     db.supplierPayment.findMany({ include: { supplier: { select: { name: true } }, purchase: { select: { invoiceNo: true } } } }),
     db.stockAdjustment.findMany({ include: { variant: { include: { product: true } }, user: { select: { name: true } } } }),
     db.registerSession.findMany({ include: { user: { select: { name: true } } } }),
     db.auditLog.findMany({ include: { user: { select: { name: true } } }, take: 500 }),
-    db.setting.findMany(),
+    db.setting.findMany({ where: { key: { notIn: ['managerPin', 'googleClientEmail', 'googlePrivateKey', 'googleSpreadsheetId', 'googleLiveCsvUrl', 'appsScriptUrl', 'appsScriptToken'] } } }),
   ])
 
   if (format === 'csv') {
@@ -152,11 +154,28 @@ export async function GET(req: NextRequest) {
       })),
     },
     {
+      name: 'PurchaseReturns',
+      rows: purchaseReturns.map((r) => ({
+        id: r.id, returnNo: r.returnNo, purchaseInvoice: r.purchase?.invoiceNo || '',
+        supplier: r.supplier?.name || '', user: r.user?.name || '', date: r.date.toISOString(),
+        total: r.total, refundMethod: r.refundMethod, refundAmount: r.refundAmount,
+        reason: r.reason || '', status: r.status,
+      })),
+    },
+    {
+      name: 'PurchaseReturnItems',
+      rows: purchaseReturnItems.map((i) => ({
+        id: i.id, returnNo: i.purchaseReturn?.returnNo || '', purchaseItemId: i.purchaseItemId || '',
+        product: i.variant?.product.name || '', sku: i.variant?.sku || '',
+        quantity: i.quantity, unitCost: i.unitCost, total: i.total,
+      })),
+    },
+    {
       name: 'SaleReturns',
       rows: saleReturns.map((r) => ({
         id: r.id, returnNo: r.returnNo, saleInvoice: r.sale?.invoiceNo || '',
-        customer: r.customer?.name || '', date: r.date.toISOString(),
-        total: r.total, reason: r.reason || '', status: r.status,
+        customer: r.customer?.name || '', user: r.user?.name || '', date: r.date.toISOString(),
+        total: r.total, refundMethod: r.refundMethod, reason: r.reason || '', status: r.status,
       })),
     },
     {
@@ -170,7 +189,7 @@ export async function GET(req: NextRequest) {
     {
       name: 'CustomerPayments',
       rows: customerPayments.map((p) => ({
-        id: p.id, customer: p.customer?.name || '', saleInvoice: p.sale?.invoiceNo || '',
+        id: p.id, customer: p.customer?.name || '', saleInvoice: p.sale?.invoiceNo || '', user: p.user?.name || '',
         amount: p.amount, method: p.method, date: p.date.toISOString(),
       })),
     },
