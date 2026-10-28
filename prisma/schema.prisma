@@ -33,6 +33,8 @@ model User {
   stockAdjustments StockAdjustment[]
   sales            Sale[]
   customerPayments CustomerPayment[]
+  saleReturns      SaleReturn[]
+  purchaseReturns  PurchaseReturn[]
 }
 
 // ------------------------------------------------------------
@@ -199,6 +201,8 @@ model PurchaseReturn {
   purchase   Purchase @relation(fields: [purchaseId], references: [id])
   supplierId String
   supplier   Supplier @relation(fields: [supplierId], references: [id])
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   date       DateTime @default(now())
   total      Float    @default(0)
   reason     String?
@@ -286,6 +290,8 @@ model SaleReturn {
   sale       Sale     @relation(fields: [saleId], references: [id])
   customerId String?
   customer   Customer? @relation(fields: [customerId], references: [id])
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   date       DateTime @default(now())
   subtotal   Float    @default(0)
   total      Float    @default(0)
