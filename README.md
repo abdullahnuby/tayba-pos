@@ -62,7 +62,7 @@ npm run start
 | `npm run dev` | تشغيل التطوير محليًا |
 | `npm run build` | توليد Prisma ثم بناء Next.js |
 | `npm run start` | تشغيل النسخة المبنية |
-| `npm run db:setup` | إنشاء/تحديث مخطط SQLite المحلي من Prisma |
+| `npm run db:setup` (يفحص سلامة الملف، وينشئ نسخة حماية قبل ترقية قاعدة موجودة، ولا يستخدم `--accept-data-loss`) | إنشاء/تحديث مخطط SQLite المحلي من Prisma |
 | `npm run db:studio` | فتح Prisma Studio لفحص قاعدة البيانات |
 
 **خذ نسخة احتياطية قبل تشغيل `npm run db:setup` على قاعدة بيانات بها بيانات فعلية.** لا يوجد أمر reset تلقائي؛ الأمر `npm run db:reset` مرفوض عمدًا لحماية بيانات المحل.
