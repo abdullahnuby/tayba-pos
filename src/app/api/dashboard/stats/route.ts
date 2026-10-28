@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
-import { recognizedLineRevenue } from '@/lib/reporting'
+import { recognizedLineRevenue, recognizedReturnRevenue } from '@/lib/reporting'
 
 const activeSaleStatuses = ['completed', 'partial_return', 'returned']
 const dayKey = (date: Date) => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`
@@ -42,8 +42,8 @@ export async function GET() {
     ), 0)
   ), 0) + todayReturns.reduce((sum, returned) => (
     sum + returned.items.reduce((lineSum, item) => (
-      lineSum + item.saleItem.unitCost * item.quantity - recognizedLineRevenue(returned.sale, item)
-    ), 0)
+      lineSum + item.saleItem.unitCost * item.quantity
+    ), 0) - recognizedReturnRevenue(returned.sale, returned.total)
   ), 0)
 
   const variants = await db.productVariant.findMany({
@@ -121,8 +121,8 @@ export async function GET() {
     if (!row) continue
     row.sales -= returned.total
     row.profit += returned.items.reduce((sum, item) => (
-      sum + item.saleItem.unitCost * item.quantity - recognizedLineRevenue(returned.sale, item)
-    ), 0)
+      sum + item.saleItem.unitCost * item.quantity
+    ), 0) - recognizedReturnRevenue(returned.sale, returned.total)
   }
 
   const salesTrend = Array.from(trendMap.entries()).map(([date, value]) => ({
@@ -144,9 +144,12 @@ export async function GET() {
     }
   }
   for (const returned of allReturns) {
+    const returnBasis = returned.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    const recognizedReturn = recognizedReturnRevenue(returned.sale, returned.total)
     for (const item of returned.items) {
       const current = productMap.get(item.variantId) || { qty: 0, revenue: 0, profit: 0 }
-      const lineRevenue = recognizedLineRevenue(returned.sale, item)
+      const lineBasis = item.unitPrice * item.quantity
+      const lineRevenue = returnBasis > 0 ? recognizedReturn * lineBasis / returnBasis : 0
       current.qty -= item.quantity
       current.revenue -= lineRevenue
       current.profit += item.saleItem.unitCost * item.quantity - lineRevenue
