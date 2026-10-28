@@ -186,35 +186,6 @@ export function StoreSettingsSection() {
         </CardContent>
       </Card>
 
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">المزامنة التلقائية مع Google Sheets</CardTitle>
-          <CardDescription>مزامنة تلقائية بعد كل عملية بيع/شراء/مرتجع</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between rounded-md border p-3">
-            <div>
-              <Label>تفعيل المزامنة التلقائية</Label>
-              <p className="text-xs text-muted-foreground">عند كل عملية، يتم تحديث الأوراق المتأثرة في Google Sheet تلقائياً</p>
-            </div>
-            <Switch checked={form.autoSyncEnabled !== 'false'} onCheckedChange={(c) => update('autoSyncEnabled', c)} />
-          </div>
-          <div className="mt-3 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground mb-1">كيف تعمل المزامنة التلقائية؟</p>
-            <ul className="space-y-1 list-disc list-inside">
-              <li>عند بيع: تُحدّث أوراق <b>Sales + SaleItems</b> (+ Customers لو آجل)</li>
-              <li>عند شراء: تُحدّث أوراق <b>Purchases + PurchaseItems + Variants</b> (+ Suppliers)</li>
-              <li>عند مرتجع: تُحدّث أوراق <b>SaleReturns + Variants</b></li>
-              <li>عند دفعة: تُحدّث أوراق <b>CustomerPayments / SupplierPayments</b></li>
-              <li>عند تعديل مخزون/منتج: تُحدّث أوراق <b>Variants / Products</b></li>
-            </ul>
-            <p className="mt-2 text-amber-700 dark:text-amber-400">
-              ⚠️ الفشل في المزامنة لا يوقف العملية — يمكنك إعادة المزامنة يدوياً من صفحة المزامنة.
-            </p>
-          </div>
-        </CardContent>
-      </Card>
-
       <div className="flex justify-end">
         <Button onClick={save} disabled={saveMutation.isPending} size="lg">
           <Save className="size-4" /> {saveMutation.isPending ? 'جارٍ الحفظ...' : 'حفظ الإعدادات'}
