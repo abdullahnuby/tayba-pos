@@ -577,6 +577,21 @@ export async function localAtomicAction<T = any>(
 
     case 'commit_stock_adjustments': {
       return database.$transaction(async (tx) => {
+        const rawKey = String(input.idempotencyKey || '').trim()
+        const settingKey = rawKey ? `idempotency:stock-adjustment:${rawKey}` : ''
+        if (settingKey) {
+          const existing = await tx.setting.findUnique({ where: { key: settingKey } })
+          if (existing) {
+            try {
+              const ids = JSON.parse(existing.value) as string[]
+              if (!Array.isArray(ids) || ids.some((value) => typeof value !== 'string')) throw new Error('invalid ids')
+              return tx.stockAdjustment.findMany({ where: { id: { in: ids } }, include: { variant: true } })
+            } catch {
+              throw new Error('مفتاح منع التكرار مرتبط بسجل غير صالح؛ راجع سجل العمليات')
+            }
+          }
+        }
+
         const items = Array.isArray(input.items) ? input.items : []
         if (!items.length) throw new Error('لم يتم إرسال أصناف للتعديل')
         const normalized = items.map((item: AnyRecord) => {
@@ -609,7 +624,6 @@ export async function localAtomicAction<T = any>(
           if (variant.quantity + change < 0) throw new Error('لا يمكن أن يصبح المخزون بالسالب')
         }
         for (const [variantId, change] of changes) {
-          const variant = variantMap.get(variantId) as AnyRecord
           const updated = await tx.productVariant.updateMany({
             where: { id: variantId, quantity: { gte: Math.max(0, -change) } },
             data: { quantity: { increment: change }, updatedAt: new Date() },
@@ -631,6 +645,13 @@ export async function localAtomicAction<T = any>(
               notes: item.notes,
             },
           }))
+        }
+        if (settingKey) {
+          await tx.setting.upsert({
+            where: { key: settingKey },
+            create: { id: id(), key: settingKey, value: JSON.stringify(created.map((row) => row.id)) },
+            update: { value: JSON.stringify(created.map((row) => row.id)) },
+          })
         }
         return created
       }) as Promise<T>
