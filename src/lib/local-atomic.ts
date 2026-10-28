@@ -585,7 +585,7 @@ export async function localAtomicAction<T = any>(
         }
         for (const [variantId, quantity] of totals) await updateStock(tx, variantId, -quantity)
         if (sale.customerId) {
-          const due = Math.max(0, numeric(sale.total) - numeric(sale.paid))
+          const due = money(Math.max(0, numeric(sale.total) - numeric(sale.paid)))
           if (due > 0) await tx.customer.update({ where: { id: sale.customerId }, data: { balance: { increment: due }, updatedAt: new Date() } })
         }
         return tx.sale.update({ where: { id: sale.id }, data: { status: 'completed' } })
