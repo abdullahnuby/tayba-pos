@@ -103,7 +103,7 @@ export async function POST(req: NextRequest) {
       if (recent) return NextResponse.json(user.role === 'cashier' ? sanitizeCashierSale(recent) : recent, { status: 200 })
     }
 
-    const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount: data.discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, idempotencyKey, notes: `${data.notes || ''}${rawIdempotencyKey ? ` [idem:${rawIdempotencyKey}]` : ''}`.trim() || null, items: data.items } })
+    const result = await atomicAction('commit_sale', { payload: { userId: user.id, requiresOpenShift: user.role === 'cashier', customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount: data.discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, idempotencyKey, notes: `${data.notes || ''}${rawIdempotencyKey ? ` [idem:${rawIdempotencyKey}]` : ''}`.trim() || null, items: data.items } })
     // atomicAction returns the raw created rows (no relations) — re-fetch with the same
     // includes used everywhere else (customer, items.variant.product) so the receipt screen
     // that renders immediately after checkout has the fields it expects instead of crashing
