@@ -29,12 +29,13 @@ export async function GET() {
       if (s.status !== 'open') return s
       const sales = await db.sale.findMany({
         where: { date: { gte: s.openedAt, lte: now }, status: 'completed', userId: s.userId },
-        select: { total: true, paymentMethod: true },
+        select: { total: true, paid: true, paymentMethod: true },
       })
-      const cashSales = sales.filter((x) => x.paymentMethod === 'cash').reduce((sum, x) => sum + x.total, 0)
-      const cardSales = sales.filter((x) => x.paymentMethod === 'card').reduce((sum, x) => sum + x.total, 0)
-      const transferSales = sales.filter((x) => x.paymentMethod === 'transfer').reduce((sum, x) => sum + x.total, 0)
-      return { ...s, cashSales, cardSales, transferSales }
+      const cashSales = sales.filter((x) => x.paymentMethod === 'cash').reduce((sum, x) => sum + x.paid, 0)
+      const cardSales = sales.filter((x) => x.paymentMethod === 'card').reduce((sum, x) => sum + x.paid, 0)
+      const transferSales = sales.filter((x) => x.paymentMethod === 'transfer').reduce((sum, x) => sum + x.paid, 0)
+      const creditSales = sales.filter((x) => x.paymentMethod === 'credit').reduce((sum, x) => sum + x.total, 0)
+      return { ...s, cashSales, cardSales, transferSales, creditSales }
     })
   )
 
@@ -50,9 +51,11 @@ export async function POST(req: NextRequest) {
     const pinCheck = await verifyUserPin(user.id, parsed.data.pin)
     if (pinCheck === 'no-pin') return NextResponse.json({ error: 'لم يتم تحديد رقم سري لك بعد — راجع الإدارة' }, { status: 403 })
     if (pinCheck === 'wrong') return NextResponse.json({ error: 'الرقم السري غير صحيح' }, { status: 403 })
-    const existing = await db.registerSession.findFirst({ where: { userId: user.id, status: 'open' } })
-    if (existing) return NextResponse.json({ error: 'لديك وردية مفتوحة بالفعل' }, { status: 409 })
-    const session = await db.registerSession.create({ data: { userId: user.id, openingFloat: parsed.data.openingFloat, notes: parsed.data.notes || null, status: 'open' } })
+    const session = await db.$transaction(async (tx: any) => {
+      const existing = await tx.registerSession.findFirst({ where: { userId: user.id, status: 'open' } })
+      if (existing) throw new Error('لديك وردية مفتوحة بالفعل')
+      return tx.registerSession.create({ data: { userId: user.id, openingFloat: parsed.data.openingFloat, notes: parsed.data.notes || null, status: 'open' } })
+    })
     await auditLog({ user, action: 'register_open', entity: 'registerSession', entityId: session.id, after: { openingFloat: session.openingFloat } })
     return NextResponse.json(session, { status: 201 })
   } catch (e: unknown) { return NextResponse.json({ error: e instanceof Error ? e.message : 'خطأ' }, { status: 500 }) }
@@ -85,7 +88,7 @@ export async function PATCH(req: NextRequest) {
     const expectedCash = session.openingFloat + cashSales + customerCash - cashRefunds
     const difference = parsed.data.closingFloat - expectedCash
     const updated = await db.registerSession.update({ where: { id: session.id }, data: { closedAt: now, closingFloat: parsed.data.closingFloat, expectedCash, difference, cashSales, cardSales, transferSales, notes: parsed.data.notes || null, status: 'closed' } })
-    const report = { invoiceCount: sales.length, cashSales, cardSales, transferSales, creditSales, customerCash, cashRefunds, openingFloat: session.openingFloat, expectedCash, closingFloat: parsed.data.closingFloat, difference, totalSales: sales.reduce((s, x) => s + x.total, 0), closedAt: now.toISOString() }
+    const report = { invoiceCount: sales.length, cashSales, cardSales, transferSales, creditSales, customerCash, cashRefunds, openingFloat: session.openingFloat, expectedCash, closingFloat: parsed.data.closingFloat, difference, totalSales: sales.reduce((sum, sale) => sum + sale.total, 0), closedAt: now.toISOString(), note: 'التحصيلات النقدية المنسوبة للكاشير فقط تدخل في درج الوردية؛ التحصيلات القديمة غير المنسوبة لا تُحمّل على وردية بعينها.' }
     await auditLog({ user, action: 'register_close', entity: 'registerSession', entityId: session.id, after: report })
     return NextResponse.json({ ...updated, report })
   } catch (e: unknown) { return NextResponse.json({ error: e instanceof Error ? e.message : 'خطأ' }, { status: 500 }) }
