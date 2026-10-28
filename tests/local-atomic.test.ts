@@ -178,6 +178,54 @@ test('cash return reduces outstanding customer debt before refunding cash', asyn
   assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
 })
 
+test('partially paid sale return offsets unpaid balance before issuing a cash refund', async () => {
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      customerId,
+      items: [{ variantId, quantity: 2, unitPrice: 10 }],
+      discount: 0,
+      paid: 15,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-partial-paid-return',
+    },
+  })
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 5)
+
+  const returned = await localAtomicAction<any>(db, 'commit_sale_return', {
+    payload: {
+      saleId: sale.id,
+      idempotencyKey: 'ci-partial-paid-return-key',
+      refundMethod: 'cash',
+      items: [{ saleItemId: sale.items[0].id, quantity: 1 }],
+    },
+  })
+  assert.equal(returned.total, 10)
+  assert.equal(returned.refundAmount, 5)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
+  assert.equal((await db.sale.findUniqueOrThrow({ where: { id: sale.id } })).status, 'partial_return')
+})
+
+test('resuming a draft reserves stock and applies only the remaining customer debt', async () => {
+  const beforeQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  const draft = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      customerId,
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 3,
+      paymentMethod: 'cash',
+      status: 'draft',
+      idempotencyKey: 'ci-resume-draft',
+    },
+  })
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity)
+  const beforeBalance = (await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance
+  await localAtomicAction(db, 'resume_sale', { payload: { saleId: draft.id } })
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity - 1)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, beforeBalance + 7)
+})
+
 test('purchase aggregates repeated variant lines and deduplicates repeated submissions', async () => {
   const payload = {
     idempotencyKey: 'ci-purchase-repeat-key',
@@ -213,6 +261,19 @@ test('purchase returns are linked to source lines and cannot exceed purchased qu
   })
   assert.equal(first.items[0].purchaseItemId, purchaseItemId)
   assert.equal(first.total, 7)
+  assert.equal(first.refundAmount, 7)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, 34)
+
+  const creditReturn = await localAtomicAction<any>(db, 'commit_purchase_return', {
+    payload: {
+      purchaseId,
+      supplierId,
+      refundMethod: 'credit',
+      items: [{ purchaseItemId, quantity: 1 }],
+    },
+  })
+  assert.equal(creditReturn.refundAmount, 0)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, 27)
 
   const quantityAfterReturn = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
   await assert.rejects(
