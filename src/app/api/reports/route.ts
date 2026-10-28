@@ -25,12 +25,29 @@ export async function GET(req: NextRequest) {
   const [sales, purchases, returns, purchaseReturns] = await Promise.all([
     db.sale.findMany({
       where: { date: { gte: start, lte: end }, status: { in: ['completed', 'partial_return', 'returned'] } },
-      include: { items: { include: { variant: { include: { product: { include: { category: true } } } } } },
+      include: {
+        items: {
+          include: {
+            variant: {
+              include: { product: { include: { category: true } } },
+            },
+          },
+        },
+      },
     }),
     db.purchase.findMany({ where: { date: { gte: start, lte: end }, status: 'completed' } }),
     db.saleReturn.findMany({
       where: { date: { gte: start, lte: end }, status: 'completed' },
-      include: { items: { include: { saleItem: true, variant: { include: { product: { include: { category: true } } } } } },
+      include: {
+        items: {
+          include: {
+            saleItem: true,
+            variant: {
+              include: { product: { include: { category: true } } },
+            },
+          },
+        },
+      },
     }),
     db.purchaseReturn.findMany({ where: { date: { gte: start, lte: end }, status: 'completed' } }),
   ])
