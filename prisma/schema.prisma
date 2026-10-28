@@ -216,7 +216,7 @@ model PurchaseReturn {
   notes      String?
   status         String   @default("completed")
   refundMethod   String   @default("credit")
-  refundAmount   Float    @default(0)
+  refundAmount   Float?
   idempotencyKey String?  @unique
   createdAt      DateTime @default(now())
 
@@ -307,6 +307,7 @@ model SaleReturn {
   notes      String?
   status         String   @default("completed")
   refundMethod   String   @default("cash")
+  refundAmount   Float?
   idempotencyKey String?  @unique
   createdAt      DateTime @default(now())
 
