@@ -1,207 +1,40 @@
 /**
- * Google Sheets is the source of truth.
- *
- * Sync features:
- * - Warm/refresh the Cloudflare KV cache from Google Sheets.
- * - Verify the Google Apps Script gateway.
- * - Test an Apps Script URL independently from the configured URL.
+ * Local-only compatibility surface for older UI/API imports.
+ * All operational data stays in SQLite; no network synchronization is performed.
  */
 
-import { archiveLocalDatabase } from '@/lib/archive'
-import { db } from '@/lib/db'
-
 export interface SyncConfig {
-  method: 'apps_script' | null
-  appsScriptUrl?: string
+  method: 'local'
+  source: 'sqlite'
 }
 
 export interface AppsScriptConnectionResult {
-  ok: boolean
+  ok: false
   message: string
-  url?: string
-  status?: number
-  response?: unknown
-}
-
-function configuredAppsScriptUrl(): string {
-  return process.env.GOOGLE_APPS_SCRIPT_URL || ''
 }
 
 export async function getSyncConfig(): Promise<SyncConfig> {
-  const envUrl = configuredAppsScriptUrl()
-
-  if (envUrl) {
-    return {
-      method: 'apps_script',
-      appsScriptUrl: envUrl,
-    }
-  }
-
-  const row = await db.setting.findUnique({
-    where: { key: 'appsScriptUrl' },
-  })
-
-  return row?.value
-    ? {
-        method: 'apps_script',
-        appsScriptUrl: row.value,
-      }
-    : {
-        method: null,
-      }
+  return { method: 'local', source: 'sqlite' }
 }
 
 export async function isGoogleConfigured(): Promise<boolean> {
-  const config = await getSyncConfig()
-  const token = process.env.GOOGLE_APPS_SCRIPT_TOKEN || await getSetting('appsScriptToken')
-  return config.method === 'apps_script' && Boolean(token)
+  return false
 }
 
-/**
- * Test a Google Apps Script Web App URL.
- *
- * This function is intentionally independent from sheetsPing()
- * because the admin endpoint allows the administrator to test
- * a URL before saving/using it.
- */
-export async function testAppsScriptConnection(
-  url: string
-): Promise<AppsScriptConnectionResult> {
-  const normalizedUrl = url.trim()
-
-  if (!normalizedUrl) {
-    return {
-      ok: false,
-      message: 'رابط Google Apps Script مطلوب',
-    }
-  }
-
-  let parsedUrl: URL
-
-  try {
-    parsedUrl = new URL(normalizedUrl)
-  } catch {
-    return {
-      ok: false,
-      message: 'رابط Google Apps Script غير صحيح',
-    }
-  }
-
-  if (parsedUrl.protocol !== 'https:') {
-    return {
-      ok: false,
-      message: 'يجب أن يكون رابط Google Apps Script باستخدام HTTPS',
-    }
-  }
-
-  const controller = new AbortController()
-  const timeout = setTimeout(() => controller.abort(), 10000)
-
-  try {
-    const response = await fetch(parsedUrl.toString(), {
-      method: 'GET',
-      redirect: 'follow',
-      cache: 'no-store',
-      signal: controller.signal,
-      headers: {
-        Accept: 'application/json,text/plain,*/*',
-      },
-    })
-
-    const text = await response.text()
-
-    let responseData: unknown = text
-
-    try {
-      responseData = text ? JSON.parse(text) : null
-    } catch {
-      // Apps Script may return plain text or HTML.
-      responseData = text
-    }
-
-    if (!response.ok) {
-      return {
-        ok: false,
-        message: `Google Apps Script رد بحالة HTTP ${response.status}`,
-        url: parsedUrl.toString(),
-        status: response.status,
-        response: responseData,
-      }
-    }
-
-    return {
-      ok: true,
-      message: 'تم الاتصال بـ Google Apps Script بنجاح',
-      url: parsedUrl.toString(),
-      status: response.status,
-      response: responseData,
-    }
-  } catch (error: unknown) {
-    const err = error as {
-      name?: string
-      message?: string
-    }
-
-    if (err?.name === 'AbortError') {
-      return {
-        ok: false,
-        message: 'انتهت مهلة الاتصال بـ Google Apps Script بعد 10 ثوانٍ',
-        url: parsedUrl.toString(),
-      }
-    }
-
-    return {
-      ok: false,
-      message:
-        err?.message ||
-        'تعذر الاتصال بـ Google Apps Script',
-      url: parsedUrl.toString(),
-    }
-  } finally {
-    clearTimeout(timeout)
-  }
+export async function testAppsScriptConnection(_url: string): Promise<AppsScriptConnectionResult> {
+  return { ok: false, message: 'تم تعطيل تكامل Google Sheets نهائيًا؛ البيانات محفوظة محليًا فقط.' }
 }
 
+/** Kept temporarily for older routes; callers must not treat this as an archive. */
 export async function syncAllSheets() {
-  return archiveLocalDatabase()
+  return { ok: false, disabled: true, source: 'local-sqlite', message: 'المزامنة السحابية معطلة في النسخة المحلية.' }
 }
 
-export async function syncAfterSale(
-  customerId?: string | null
-) {
-  void customerId
-}
-
-export async function syncAfterPurchase(
-  supplierId?: string | null
-) {
-  void supplierId
-}
-
-export async function syncAfterReturn(
-  customerId?: string | null
-) {
-  void customerId
-}
-
-export async function syncAfterCustomerPayment() {
-}
-
-export async function syncAfterSupplierPayment() {
-}
-
-export async function syncAfterAdjustment() {
-}
-
-export async function syncAfterProduct() {
-}
-
-export async function getLastSyncAt() {
-  const row = await db.setting.findUnique({
-    where: {
-      key: 'lastGoogleArchiveAt',
-    },
-  })
-
-  return row?.value || null
-}
+export async function syncAfterSale(_customerId?: string | null): Promise<void> {}
+export async function syncAfterPurchase(_supplierId?: string | null): Promise<void> {}
+export async function syncAfterReturn(_customerId?: string | null): Promise<void> {}
+export async function syncAfterCustomerPayment(): Promise<void> {}
+export async function syncAfterSupplierPayment(): Promise<void> {}
+export async function syncAfterAdjustment(): Promise<void> {}
+export async function syncAfterProduct(): Promise<void> {}
+export async function getLastSyncAt(): Promise<string | null> { return null }
