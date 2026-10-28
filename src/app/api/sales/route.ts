@@ -84,7 +84,6 @@ export async function POST(req: NextRequest) {
     })
     const response = full || result
     await auditLog({ user, action: 'create', entity: 'sale', entityId: (result as any).id, after: { invoiceNo: (result as any).invoiceNo, total: (result as any).total, status: data.status, managerOverride } })
-    if (data.status === 'completed') { try { const { syncAfterSale } = await import('@/lib/sync'); await syncAfterSale(data.customerId) } catch {} }
     return NextResponse.json(response, { status: 201 })
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string }
