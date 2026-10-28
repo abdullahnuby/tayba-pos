@@ -104,7 +104,9 @@ export async function POST(req: NextRequest) {
     const map = new Map<string, (typeof variants)[number]>(variants.map((v) => [v.id, v] as const))
     if (data.status === 'completed') for (const it of data.items) { const v = map.get(it.variantId)!; if (v.quantity < it.quantity) return NextResponse.json({ error: `المخزون غير كافٍ لـ ${v.product.name} (${v.sku})` }, { status: 400 }) }
 
-    const subtotal = data.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0)
+    const subtotal = Math.round((data.items.reduce((sum, item) => (
+      sum + Math.round((item.unitPrice * item.quantity + Number.EPSILON) * 100) / 100
+    ), 0) + Number.EPSILON) * 100) / 100
     if (data.discount > subtotal) return NextResponse.json({ error: 'الخصم أكبر من الإجمالي' }, { status: 400 })
     if (user.role === 'cashier' && !managerOverride && data.discount > subtotal * 0.1) return NextResponse.json({ error: 'خصم أكثر من 10% يحتاج موافقة المدير' }, { status: 403 })
 
