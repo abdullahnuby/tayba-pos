@@ -360,19 +360,33 @@ export async function localAtomicAction<T = any>(
         if (input.supplierId && input.supplierId !== purchase.supplierId) throw new Error('المورد لا يطابق فاتورة الشراء')
 
         const purchaseItemMap = new Map(purchase.items.map((item: AnyRecord) => [item.id, item]))
-        const returnedRows = await tx.purchaseReturnItem.groupBy({
-          by: ['purchaseItemId'],
+        const returnedRows = await tx.purchaseReturnItem.findMany({
           where: { purchaseReturn: { purchaseId: purchase.id, status: 'completed' } },
-          _sum: { quantity: true },
+          select: { variantId: true, quantity: true, purchaseItemId: true },
         })
-        const returnedMap = new Map(returnedRows.map((row: AnyRecord) => [row.purchaseItemId, numeric(row._sum.quantity)]))
+        const purchasedByVariant = new Map<string, number>()
+        for (const row of purchase.items) {
+          purchasedByVariant.set(row.variantId, (purchasedByVariant.get(row.variantId) || 0) + row.quantity)
+        }
+        const returnedByVariant = new Map<string, number>()
+        for (const row of returnedRows) {
+          returnedByVariant.set(row.variantId, (returnedByVariant.get(row.variantId) || 0) + row.quantity)
+        }
         const normalized = items.map((item: AnyRecord) => {
           const purchaseItem = purchaseItemMap.get(String(item.purchaseItemId || '')) as AnyRecord | undefined
           if (!purchaseItem) throw new Error('بند فاتورة الشراء غير صحيح')
           const quantity = requiredPositiveInt(item.quantity, 'كمية الإرجاع')
-          if ((returnedMap.get(purchaseItem.id) || 0) + quantity > purchaseItem.quantity) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة')
           return { purchaseItem, quantity }
         })
+        const requestedByVariant = new Map<string, number>()
+        for (const item of normalized) {
+          requestedByVariant.set(item.purchaseItem.variantId, (requestedByVariant.get(item.purchaseItem.variantId) || 0) + item.quantity)
+        }
+        for (const [variantId, quantity] of requestedByVariant) {
+          const already = returnedByVariant.get(variantId) || 0
+          const purchased = purchasedByVariant.get(variantId) || 0
+          if (already + quantity > purchased) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة')
+        }
         const baseSubtotal = normalized.reduce((sum, item) => sum + item.purchaseItem.unitCost * item.quantity, 0)
         const returnTotal = purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0
         const quantities = new Map<string, number>()
