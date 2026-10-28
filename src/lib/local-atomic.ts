@@ -15,6 +15,21 @@ function money(value: unknown): number {
   return Math.round((parsed + Number.EPSILON) * 100) / 100
 }
 
+function allocateMoney(total: number, bases: number[]): number[] {
+  if (!bases.length) return []
+  const weights = bases.map((value) => Math.max(0, numeric(value)))
+  const weightTotal = weights.reduce((sum, value) => sum + value, 0)
+  let allocated = 0
+  return weights.map((weight, index) => {
+    if (index === weights.length - 1) return money(total - allocated)
+    const share = money(weightTotal > 0
+      ? total * weight / weightTotal
+      : total / weights.length)
+    allocated = money(allocated + share)
+    return share
+  })
+}
+
 function requiredPositiveInt(value: unknown, label: string): number {
   const parsed = Number(value)
   if (!Number.isSafeInteger(parsed) || parsed <= 0) {
@@ -287,6 +302,10 @@ export async function localAtomicAction<T = any>(
         }
         const refundAmount = money(refundMethod === 'credit' ? 0 : Math.max(0, total - balanceOffset))
         const balanceReduction = money(refundMethod === 'credit' ? total : balanceOffset)
+        const returnLineTotals = allocateMoney(
+          total,
+          normalized.map((item) => item.unitPrice * item.quantity),
+        )
         const returnId = id()
         const created = await tx.saleReturn.create({
           data: {
@@ -305,13 +324,13 @@ export async function localAtomicAction<T = any>(
             refundMethod,
             idempotencyKey: idempotencyKey || null,
             items: {
-              create: normalized.map((item) => ({
+              create: normalized.map((item, index) => ({
                 id: id(),
                 saleItemId: item.saleItem.id,
                 variantId: item.saleItem.variantId,
                 quantity: item.quantity,
                 unitPrice: item.unitPrice,
-                total: money(item.unitPrice * item.quantity),
+                total: returnLineTotals[index],
               })),
             },
           },
@@ -539,6 +558,10 @@ export async function localAtomicAction<T = any>(
           const variant = await tx.productVariant.findUnique({ where: { id: variantId }, select: { quantity: true } })
           if (!variant || variant.quantity < quantity) throw new Error('المخزون غير كافٍ لتنفيذ المرتجع')
         }
+        const returnLineTotals = allocateMoney(
+          returnTotal,
+          normalized.map((item) => item.purchaseItem.unitCost * item.quantity),
+        )
         const created = await tx.purchaseReturn.create({
           data: {
             id: id(),
