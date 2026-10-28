@@ -14,8 +14,10 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const search = url.searchParams.get('search') || ''
   const status = url.searchParams.get('status')
-  const page = Math.max(1, Number(url.searchParams.get('page') || 1))
-  const pageSize = Math.min(500, Math.max(1, Number(url.searchParams.get('pageSize') || 50)))
+  const rawPage = Number(url.searchParams.get('page') || '1')
+  const rawPageSize = Number(url.searchParams.get('pageSize') || '50')
+  const page = Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1)
+  const pageSize = Math.min(100, Math.max(1, Number.isFinite(rawPageSize) ? Math.floor(rawPageSize) : 50))
   const where: any = {}
   if (user.role === 'cashier') where.userId = user.id
   if (status && status !== 'all') where.status = status
@@ -56,7 +58,7 @@ export async function POST(req: NextRequest) {
     const variantIds = [...new Set(data.items.map(i => i.variantId))]
     const variants = await db.productVariant.findMany({ where: { id: { in: variantIds } }, select: { id: true, quantity: true, sellPrice: true, sku: true, product: { select: { name: true } } } })
     if (variants.length !== variantIds.length) return NextResponse.json({ error: 'بعض المنتجات غير موجودة' }, { status: 400 })
-    const map = new Map(variants.map(v => [v.id, v]))
+    const map = new Map<string, (typeof variants)[number]>(variants.map((v) => [v.id, v] as const))
     if (data.status === 'completed') for (const it of data.items) { const v = map.get(it.variantId)!; if (v.quantity < it.quantity) return NextResponse.json({ error: `المخزون غير كافٍ لـ ${v.product.name} (${v.sku})` }, { status: 400 }) }
 
     const subtotal = data.items.reduce((s, i) => s + i.unitPrice * i.quantity, 0)
@@ -73,7 +75,7 @@ export async function POST(req: NextRequest) {
       if (recent) return NextResponse.json(recent, { status: 200 })
     }
 
-    const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, idempotencyKey, notes: `${data.notes || ''}${rawIdempotencyKey ? ` [idem:${rawIdempotencyKey}]` : ''}`.trim() || null, items: data.items } })
+    const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount: data.discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, idempotencyKey, notes: `${data.notes || ''}${rawIdempotencyKey ? ` [idem:${rawIdempotencyKey}]` : ''}`.trim() || null, items: data.items } })
     // atomicAction returns the raw created rows (no relations) — re-fetch with the same
     // includes used everywhere else (customer, items.variant.product) so the receipt screen
     // that renders immediately after checkout has the fields it expects instead of crashing
