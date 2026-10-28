@@ -90,6 +90,27 @@ test('sale is atomic, decrements stock, and deduplicates repeated submissions', 
   saleItemId = first.items[0].id
 })
 
+test('invoice line totals and balances are rounded to cents', async () => {
+  await db.setting.upsert({ where: { key: 'vatEnabled' }, update: { value: 'false' }, create: { key: 'vatEnabled', value: 'false' } })
+  await db.setting.upsert({ where: { key: 'vatInclusive' }, update: { value: 'false' }, create: { key: 'vatInclusive', value: 'false' } })
+
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      items: [{ variantId, quantity: 3, unitPrice: 0.1 }],
+      discount: 0,
+      paid: 0.3,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-money-cents-rounding',
+    },
+  })
+  assert.equal(sale.subtotal, 0.3)
+  assert.equal(sale.total, 0.3)
+  assert.equal(sale.paid, 0.3)
+  assert.equal(sale.items[0].total, 0.3)
+  assert.equal(sale.change, 0)
+})
+
 test('sale rejects insufficient stock without partially writing', async () => {
   const countBefore = await db.sale.count()
   const quantityBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
