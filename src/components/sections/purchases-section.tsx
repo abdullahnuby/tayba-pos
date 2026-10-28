@@ -168,7 +168,7 @@ export function PurchasesSection() {
     }
     // Older return lines did not store purchaseItemId. Allocate them to original
     // purchase lines of the same variant in stable order, matching the server.
-    const byVariant = new Map<string, typeof returningPurchase.items>()
+    const byVariant = new Map<string, Purchase['items']>()
     for (const item of [...returningPurchase.items].sort((a, b) => a.id.localeCompare(b.id))) {
       const list = byVariant.get(item.variantId) || []
       list.push(item)
