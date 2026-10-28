@@ -125,7 +125,7 @@ export async function GET(req: NextRequest) {
     const row = daily.get(key)
     if (row) {
       row.sales += sale.total
-      row.profit += sale.items.reduce((sum, item) => sum + item.total - item.unitCost * item.quantity, 0)
+      row.profit += sale.items.reduce((sum, item) => sum + recognizedLineRevenue(sale, item) - item.unitCost * item.quantity, 0)
     }
   }
   for (const purchase of purchases) {
