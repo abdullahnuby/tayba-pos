@@ -19,6 +19,7 @@ const schema = z.object({
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية مرتجعات الشراء' }, { status: 403 })
   const purchaseId = new URL(req.url).searchParams.get('purchaseId')
   const returns = await db.purchaseReturn.findMany({
     where: purchaseId ? { purchaseId } : {},
@@ -35,7 +36,8 @@ export async function POST(req: NextRequest) {
     if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية مرتجعات الشراء' }, { status: 403 })
     const parsed = schema.safeParse(await req.json())
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
-    const data = { ...parsed.data, idempotencyKey: parsed.data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined }
+    const rawIdempotencyKey = parsed.data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    const data = { ...parsed.data, idempotencyKey: rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined }
     const result = await atomicAction<any>('commit_purchase_return', { payload: { ...data, userId: user.id } })
     await auditLog({ user, action: 'return', entity: 'purchase', entityId: data.purchaseId, after: { returnNo: result.returnNo, total: result.total, refundMethod: result.refundMethod } })
     return NextResponse.json(result, { status: 201 })
