@@ -229,6 +229,26 @@ test('resuming a draft reserves stock and applies only the remaining customer de
   assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, beforeBalance + 7)
 })
 
+test('draft sale with unpaid balance cannot resume without a customer', async () => {
+  const beforeQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  const draft = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 3,
+      paymentMethod: 'cash',
+      status: 'draft',
+      idempotencyKey: 'ci-unassigned-unpaid-draft',
+    },
+  })
+  await assert.rejects(
+    localAtomicAction(db, 'resume_sale', { payload: { saleId: draft.id } }),
+    /من دون ربطها بعميل/,
+  )
+  assert.equal((await db.sale.findUniqueOrThrow({ where: { id: draft.id } })).status, 'draft')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity)
+})
+
 test('purchase aggregates repeated variant lines and deduplicates repeated submissions', async () => {
   const beforePurchaseVariant = await db.productVariant.findUniqueOrThrow({ where: { id: variantId }, select: { quantity: true, costPrice: true } })
   const payload = {
