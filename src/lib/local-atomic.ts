@@ -51,14 +51,16 @@ async function nextInvoiceNumber(
   return `${prefix}-${String(next).padStart(6, '0')}`
 }
 
-async function taxSettings(tx: any): Promise<{ enabled: boolean; rate: number }> {
-  const [enabled, rawRate] = await Promise.all([
+async function taxSettings(tx: any): Promise<{ enabled: boolean; rate: number; inclusive: boolean }> {
+  const [enabled, rawRate, inclusive] = await Promise.all([
     settingValue(tx, 'vatEnabled', 'false'),
     settingValue(tx, 'vatRate', '14'),
+    settingValue(tx, 'vatInclusive', 'false'),
   ])
   return {
     enabled: enabled.toLowerCase() === 'true',
     rate: Math.max(0, Math.min(100, numeric(rawRate, 14))),
+    inclusive: inclusive.toLowerCase() === 'true',
   }
 }
 
@@ -142,8 +144,10 @@ export async function localAtomicAction<T = any>(
         if (discount < 0 || discount > subtotal) throw new Error('قيمة الخصم غير صحيحة')
         const tax = await taxSettings(tx)
         const taxable = Math.max(0, subtotal - discount)
-        const taxAmount = tax.enabled ? taxable * tax.rate / 100 : 0
-        const total = taxable + taxAmount
+        const taxAmount = tax.enabled
+          ? (tax.inclusive ? taxable - taxable / (1 + tax.rate / 100) : taxable * tax.rate / 100)
+          : 0
+        const total = tax.enabled && tax.inclusive ? taxable : taxable + taxAmount
         const paid = numeric(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
         if (status === 'completed' && total - Math.min(paid, total) > 0.001 && !input.customerId) {
