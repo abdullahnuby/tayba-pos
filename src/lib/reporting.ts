@@ -21,3 +21,13 @@ export function recognizedLineRevenue(sale: SaleFinancials, line: SaleLineFinanc
   if (sale.subtotal <= 0 || line.total <= 0) return 0
   return recognizedSaleRevenue(sale) * line.total / sale.subtotal
 }
+
+/** Net-of-VAT revenue represented by an actual returned invoice amount. */
+export function recognizedReturnRevenue(
+  sale: SaleFinancials,
+  returnedTotal: number,
+): number {
+  if (sale.total <= 0 || returnedTotal <= 0) return 0
+  const boundedReturn = Math.min(returnedTotal, sale.total)
+  return recognizedSaleRevenue(sale) * boundedReturn / sale.total
+}
