@@ -25,10 +25,16 @@ const purchaseSchema = z.object({
 })
 
 export async function GET(req: NextRequest) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية عرض المشتريات' }, { status: 403 })
+
   const url = new URL(req.url)
   const search = url.searchParams.get('search') || ''
-  const page = Number(url.searchParams.get('page') || '1')
-  const pageSize = Number(url.searchParams.get('pageSize') || '50')
+  const rawPage = Number(url.searchParams.get('page') || '1')
+  const rawPageSize = Number(url.searchParams.get('pageSize') || '50')
+  const page = Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1)
+  const pageSize = Math.min(100, Math.max(1, Number.isFinite(rawPageSize) ? Math.floor(rawPageSize) : 50))
 
   const where = search ? {
     OR: [
