@@ -533,7 +533,7 @@ test('cash purchase return refunds paid goods when supplier account has no outst
   })
   assert.equal(returned.total, 10)
   assert.equal(returned.refundAmount, 10)
-  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, beforeBalance)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: cleanSupplier.id } })).balance, beforeBalance)
 })
 
 test('voiding an unpaid purchase reverses its inventory and supplier balance atomically', async () => {
