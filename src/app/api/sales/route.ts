@@ -6,6 +6,25 @@ import { auditLog } from '@/lib/audit'
 import { checkSaleItemPrice } from '@/lib/pricing'
 
 const item = z.object({ variantId: z.string().min(1), quantity: z.number().int().positive(), unitPrice: z.number().min(0.01) })
+function sanitizeCashierSale(sale: any) {
+  if (!sale) return sale
+  return {
+    ...sale,
+    customer: sale.customer ? { id: sale.customer.id, name: sale.customer.name, phone: sale.customer.phone } : null,
+    items: Array.isArray(sale.items) ? sale.items.map((item: any) => {
+      if (!item.variant) return item
+      const safeVariant: Record<string, unknown> = { ...item.variant }
+      delete safeVariant.costPrice
+      delete safeVariant.minQuantity
+      delete safeVariant.reorderQty
+      delete safeVariant.purchaseUnit
+      delete safeVariant.purchaseUnitFactor
+      delete safeVariant.baseUnit
+      return { ...item, variant: safeVariant }
+    }) : sale.items,
+  }
+}
+
 const schema = z.object({ customerId: z.string().optional().nullable(), date: z.string().optional(), discount: z.number().min(0).default(0), paymentMethod: z.enum(['cash','card','transfer','credit']).default('cash'), paid: z.number().min(0).default(0), notes: z.string().optional().nullable(), status: z.enum(['draft','completed']).default('completed'), managerPin: z.string().optional(), items: z.array(item).min(1), idempotencyKey: z.string().min(8).max(120).optional() })
 
 export async function GET(req: NextRequest) {
@@ -96,7 +115,7 @@ export async function POST(req: NextRequest) {
         orderBy: { date: 'desc' },
         include: { customer: true, items: { include: { variant: { include: { product: true } } } } },
       })
-      if (recent) return NextResponse.json(recent, { status: 200 })
+      if (recent) return NextResponse.json(user.role === 'cashier' ? sanitizeCashierSale(recent) : recent, { status: 200 })
     }
 
     const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount: data.discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, idempotencyKey, notes: `${data.notes || ''}${rawIdempotencyKey ? ` [idem:${rawIdempotencyKey}]` : ''}`.trim() || null, items: data.items } })
@@ -108,7 +127,7 @@ export async function POST(req: NextRequest) {
       where: { id: (result as { id: string }).id },
       include: { customer: true, items: { include: { variant: { include: { product: true } } } } },
     })
-    const response = full || result
+    const response = user.role === 'cashier' ? sanitizeCashierSale(full || result) : (full || result)
     await auditLog({ user, action: 'create', entity: 'sale', entityId: (result as any).id, after: { invoiceNo: (result as any).invoiceNo, total: (result as any).total, status: data.status, managerOverride } })
     return NextResponse.json(response, { status: 201 })
   } catch (e: unknown) {
