@@ -9,16 +9,9 @@ export async function GET(req: NextRequest) {
   const settings = await db.setting.findMany()
   const obj: Record<string, string> = {}
   for (const s of settings) obj[s.key] = s.value
-  // Mask the private key for security in GET response
-  if (obj.googlePrivateKey) {
-    obj.googlePrivateKeyMasked = obj.googlePrivateKey.slice(0, 20) + '...[hidden]'
-    delete obj.googlePrivateKey
-  }
-  // Never send the raw Apps Script token back to the client — only a flag + short mask.
-  if (obj.appsScriptToken) {
-    obj.appsScriptTokenSet = 'true'
-    obj.appsScriptTokenMasked = obj.appsScriptToken.slice(0, 4) + '...[hidden]'
-    delete obj.appsScriptToken
+  // Do not expose retired third-party integration settings to the client.
+  for (const key of Object.keys(obj)) {
+    if (/^(google|appsScript|autoSyncEnabled|lastGoogle)/i.test(key)) delete obj[key]
   }
   return NextResponse.json(obj)
 }
@@ -30,7 +23,17 @@ export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
     const settings = body.settings || body
+    if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+      return NextResponse.json({ error: 'بيانات الإعدادات غير صحيحة' }, { status: 400 })
+    }
+    const forbidden = Object.keys(settings).find((key) => /^(google|appsScript|autoSyncEnabled|lastGoogle)/i.test(key))
+    if (forbidden) {
+      return NextResponse.json({ error: 'إعدادات المزامنة الخارجية غير متاحة في النسخة المحلية' }, { status: 400 })
+    }
     for (const [key, value] of Object.entries(settings)) {
+      if (typeof value !== 'string' && typeof value !== 'number' && typeof value !== 'boolean') {
+        return NextResponse.json({ error: `قيمة الإعداد "${key}" غير صحيحة` }, { status: 400 })
+      }
       const strValue = String(value)
       await db.setting.upsert({
         where: { key },
