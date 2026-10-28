@@ -224,6 +224,18 @@ export async function localAtomicAction<T = any>(
           }
           return { saleItem, quantity, unitPrice: saleItem.unitPrice }
         })
+        const requestedBySaleItem = new Map<string, number>()
+        for (const item of normalized) {
+          requestedBySaleItem.set(item.saleItem.id, (requestedBySaleItem.get(item.saleItem.id) || 0) + item.quantity)
+        }
+        for (const [saleItemId, requestedQuantity] of requestedBySaleItem) {
+          const saleItem = saleItemMap.get(saleItemId) as AnyRecord
+          const prior = alreadyReturned.get(saleItemId) || 0
+          if (prior + requestedQuantity > saleItem.quantity) {
+            throw new Error('إجمالي كمية الإرجاع يتجاوز الكمية المباعة لهذا البند')
+          }
+        }
+
         const baseSubtotal = normalized.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
         const originalSubtotal = numeric(sale.subtotal)
         const total = originalSubtotal > 0 ? baseSubtotal * numeric(sale.total) / originalSubtotal : 0
@@ -377,22 +389,54 @@ export async function localAtomicAction<T = any>(
         for (const row of purchase.items) {
           purchasedByVariant.set(row.variantId, (purchasedByVariant.get(row.variantId) || 0) + row.quantity)
         }
-        const returnedByVariant = new Map<string, number>()
+        const legacyReturnedByVariant = new Map<string, number>()
+        const returnedByPurchaseItem = new Map<string, number>()
         for (const row of returnedRows) {
-          returnedByVariant.set(row.variantId, (returnedByVariant.get(row.variantId) || 0) + row.quantity)
+          if (row.purchaseItemId) {
+            returnedByPurchaseItem.set(row.purchaseItemId, (returnedByPurchaseItem.get(row.purchaseItemId) || 0) + row.quantity)
+          } else {
+            legacyReturnedByVariant.set(row.variantId, (legacyReturnedByVariant.get(row.variantId) || 0) + row.quantity)
+          }
         }
+        // Older return rows did not point to a purchase line. Allocate their quantities
+        // deterministically to lines of the same variant so the migration stays safe.
+        const legacyAllocatedByItem = new Map<string, number>()
+        const purchaseItemsByVariant = new Map<string, AnyRecord[]>()
+        for (const row of [...purchase.items].sort((a: AnyRecord, b: AnyRecord) => a.id.localeCompare(b.id))) {
+          const list = purchaseItemsByVariant.get(row.variantId) || []
+          list.push(row)
+          purchaseItemsByVariant.set(row.variantId, list)
+        }
+        for (const [variantId, rows] of purchaseItemsByVariant) {
+          let legacyLeft = legacyReturnedByVariant.get(variantId) || 0
+          for (const row of rows) {
+            const availableForAllocation = Math.max(0, row.quantity - (returnedByPurchaseItem.get(row.id) || 0))
+            const allocated = Math.min(legacyLeft, availableForAllocation)
+            legacyAllocatedByItem.set(row.id, allocated)
+            legacyLeft -= allocated
+          }
+          if (legacyLeft > 0) throw new Error('سجل مرتجعات سابق غير متطابق؛ راجع الفاتورة قبل إضافة مرتجع جديد')
+        }
+
         const normalized = items.map((item: AnyRecord) => {
           const purchaseItem = purchaseItemMap.get(String(item.purchaseItemId || '')) as AnyRecord | undefined
           if (!purchaseItem) throw new Error('بند فاتورة الشراء غير صحيح')
           const quantity = requiredPositiveInt(item.quantity, 'كمية الإرجاع')
           return { purchaseItem, quantity }
         })
+        const requestedByPurchaseItem = new Map<string, number>()
         const requestedByVariant = new Map<string, number>()
         for (const item of normalized) {
+          requestedByPurchaseItem.set(item.purchaseItem.id, (requestedByPurchaseItem.get(item.purchaseItem.id) || 0) + item.quantity)
           requestedByVariant.set(item.purchaseItem.variantId, (requestedByVariant.get(item.purchaseItem.variantId) || 0) + item.quantity)
         }
+        for (const [purchaseItemId, quantity] of requestedByPurchaseItem) {
+          const purchaseItem = purchaseItemMap.get(purchaseItemId) as AnyRecord
+          const already = (returnedByPurchaseItem.get(purchaseItemId) || 0) + (legacyAllocatedByItem.get(purchaseItemId) || 0)
+          if (already + quantity > purchaseItem.quantity) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة لهذا البند')
+        }
         for (const [variantId, quantity] of requestedByVariant) {
-          const already = returnedByVariant.get(variantId) || 0
+          const already = returnedRows.filter((row: AnyRecord) => row.variantId === variantId).reduce((sum: number, row: AnyRecord) => sum + row.quantity, 0)
           const purchased = purchasedByVariant.get(variantId) || 0
           if (already + quantity > purchased) throw new Error('كمية الإرجاع تتجاوز الكمية المشتراة')
         }
