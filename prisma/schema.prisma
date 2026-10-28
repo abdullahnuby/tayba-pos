@@ -151,8 +151,9 @@ model Customer {
 // ------------------------------------------------------------
 
 model Purchase {
-  id         String   @id @default(cuid())
-  invoiceNo  String   @unique
+  id             String   @id @default(cuid())
+  invoiceNo      String   @unique
+  idempotencyKey String?  @unique
   supplierId String
   supplier   Supplier @relation(fields: [supplierId], references: [id])
   date       DateTime @default(now())
