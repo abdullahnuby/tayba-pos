@@ -1,5 +1,4 @@
 import { NextResponse } from 'next/server'
-import { archiveLocalDatabase } from '@/lib/archive'
 import { authenticate } from '@/lib/auth-middleware'
 
 export async function POST(req: Request) {
@@ -8,13 +7,7 @@ export async function POST(req: Request) {
     rateLimitScope: 'sync',
   })
   if (auth instanceof Response) return auth
-
-  try {
-    return NextResponse.json(await archiveLocalDatabase())
-  } catch (error: unknown) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'فشل أرشفة قاعدة البيانات' },
-      { status: 500 }
-    )
-  }
+  return NextResponse.json({
+    error: 'المسار القديم لم يعد ينشئ نسخًا احتياطية. استخدم /api/backup/database لنسخ SQLite.',
+  }, { status: 410 })
 }
