@@ -39,7 +39,9 @@ export async function POST(req: NextRequest) {
     if (!parsed.success) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
     }
-    const data = parsed.data
+    const amount = Math.round((parsed.data.amount + Number.EPSILON) * 100) / 100
+    if (amount <= 0) return NextResponse.json({ error: 'المبلغ أقل من أقل وحدة نقدية مسموح بها' }, { status: 400 })
+    const data = { ...parsed.data, amount }
     const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
     if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 120)) {
       return NextResponse.json({ error: 'مفتاح منع التكرار يجب أن يكون بين 8 و120 حرفًا' }, { status: 400 })
