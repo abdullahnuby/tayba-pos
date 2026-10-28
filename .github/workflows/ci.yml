@@ -33,7 +33,7 @@ jobs:
       - name: Prepare isolated test database
         run: |
           mkdir -p data
-          DATABASE_URL=file:../data/tayba-test.db npx prisma db push --skip-generate
+          DATABASE_URL=file:../data/tayba-test.db npm run db:setup
       - name: Test core transactional behavior
         env:
           DATABASE_URL: file:../data/tayba-test.db
