@@ -80,10 +80,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
-    // Cloudflare D1 doesn't support interactive transactions (a callback that
-    // awaits reads/writes one by one). So: do the read up front (outside the
-    // transaction), build the full list of write operations, then run them all
-    // together as one D1-compatible BATCH transaction (db.$transaction([...])).
+    // Build a single local SQLite transaction for product and variant changes.
+    // The stock quantity of an existing variant is never overwritten here;
+    // live inventory moves only through purchases, sales, returns and counts.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ops: any[] = []
 
