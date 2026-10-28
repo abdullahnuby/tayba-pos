@@ -162,7 +162,7 @@ export function DashboardSection() {
               color="hsl(160 84% 39%)"
             />
             <KpiCard
-              title="ربح اليوم"
+              title="مجمل ربح اليوم"
               value={`${formatEGP(data?.todayProfit)}`}
               hint="بتكلفة البيع الفعلية"
               icon={Wallet}
@@ -212,7 +212,7 @@ export function DashboardSection() {
               color="hsl(0 70% 50%)"
             />
             <KpiCard
-              title="الربح المحتمل"
+              title="مجمل الربح المحتمل قبل المصروفات"
               value={`${formatEGP(data?.potentialProfit)}`}
               hint="لو بيع كل المخزون"
               icon={Banknote}
@@ -281,7 +281,7 @@ export function DashboardSection() {
         <Card className="lg:col-span-2">
           <CardContent className="p-5">
             <h3 className="text-base font-semibold mb-1">مبيعات وأرباح آخر 7 أيام</h3>
-            <p className="text-xs text-muted-foreground mb-4">الربح محسوب بتكلفة البيع الفعلية</p>
+            <p className="text-xs text-muted-foreground mb-4">مجمل الربح محسوب بتكلفة البيع الفعلية، قبل المصروفات التشغيلية</p>
             {isLoading ? <Skeleton className="h-[260px] w-full" /> : (
               <ResponsiveContainer width="100%" height={260}>
                 <AreaChart data={data?.salesTrend} margin={{ left: -10, right: 8, top: 8 }}>
