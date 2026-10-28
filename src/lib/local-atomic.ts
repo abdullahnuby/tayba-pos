@@ -406,7 +406,13 @@ export async function localAtomicAction<T = any>(
           const existing = await tx.purchaseReturn.findUnique({ where: { idempotencyKey }, include: { items: true } })
           if (existing) return existing
         }
-        const purchase = await tx.purchase.findUnique({ where: { id: String(input.purchaseId || '') }, include: { items: true } })
+        const purchase = await tx.purchase.findUnique({
+          where: { id: String(input.purchaseId || '') },
+          include: {
+            items: true,
+            returns: { where: { status: 'completed' }, select: { total: true } },
+          },
+        })
         if (!purchase) throw new Error('فاتورة الشراء غير موجودة')
         if (purchase.status !== 'completed') throw new Error('لا يمكن إرجاع فاتورة شراء غير مكتملة')
         if (input.supplierId && input.supplierId !== purchase.supplierId) throw new Error('المورد لا يطابق فاتورة الشراء')
@@ -474,14 +480,16 @@ export async function localAtomicAction<T = any>(
         const baseSubtotal = normalized.reduce((sum, item) => sum + item.purchaseItem.unitCost * item.quantity, 0)
         const returnTotal = purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0
         const refundMethod = String(input.refundMethod || 'credit')
+        const priorReturnTotal = purchase.returns.reduce((sum: number, returned: AnyRecord) => sum + numeric(returned.total), 0)
+        const outstandingBeforeReturn = Math.max(0, numeric(purchase.total) - numeric(purchase.paid) - priorReturnTotal)
+        const maximumCashRefund = refundMethod === 'credit'
+          ? 0
+          : Math.max(0, returnTotal - Math.min(returnTotal, outstandingBeforeReturn))
         const refundAmount = input.refundAmount == null
-          ? (refundMethod === 'credit' ? 0 : returnTotal)
+          ? maximumCashRefund
           : numeric(input.refundAmount, -1)
-        if (!Number.isFinite(refundAmount) || refundAmount < 0 || refundAmount > returnTotal + 0.001) {
-          throw new Error('قيمة الاسترداد غير صحيحة')
-        }
-        if (refundMethod === 'credit' && refundAmount > 0.001) {
-          throw new Error('المرتجع على رصيد المورد لا يسجل مبلغًا مستردًا نقديًا')
+        if (!Number.isFinite(refundAmount) || refundAmount < 0 || refundAmount > maximumCashRefund + 0.001) {
+          throw new Error('قيمة الاسترداد تتجاوز المبلغ المدفوع للمورد؛ يجب خصم المستحق أولًا')
         }
         const quantities = new Map<string, number>()
         for (const item of normalized) quantities.set(item.purchaseItem.variantId, (quantities.get(item.purchaseItem.variantId) || 0) + item.quantity)
