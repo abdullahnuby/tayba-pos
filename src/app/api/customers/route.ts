@@ -109,7 +109,10 @@ export async function POST(req: NextRequest) {
     const normalizedPhone = normalize(phone)
     const duplicate = existing.find((customer) => normalize(customer.name) === normalize(name) && normalize(customer.phone) === normalizedPhone)
     if (duplicate) {
-      return NextResponse.json({ error: 'العميل موجود بالفعل — لم يتم إنشاء نسخة مكررة', customer: duplicate }, { status: 409 })
+      const safeDuplicate = auth.user.role === 'cashier'
+        ? { id: duplicate.id, name: duplicate.name, phone: duplicate.phone }
+        : duplicate
+      return NextResponse.json({ error: 'العميل موجود بالفعل — لم يتم إنشاء نسخة مكررة', customer: safeDuplicate }, { status: 409 })
     }
     const customer = await db.customer.create({
       data: { name, phone: phone || null, address: auth.user.role === 'cashier' ? null : body.address || null, notes: auth.user.role === 'cashier' ? null : body.notes || null },
