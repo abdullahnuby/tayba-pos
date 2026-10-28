@@ -211,7 +211,7 @@ export async function localAtomicAction<T = any>(
         const saleItemMap = new Map(sale.items.map((item: AnyRecord) => [item.id, item]))
         const returnTotals = await tx.saleReturnItem.groupBy({
           by: ['saleItemId'],
-          where: { saleReturn: { saleId: sale.id, status: 'completed' } },
+          where: { saleReturn: { is: { saleId: sale.id, status: 'completed' } } },
           _sum: { quantity: true },
         })
         const alreadyReturned = new Map(returnTotals.map((row: AnyRecord) => [row.saleItemId, numeric(row._sum.quantity)]))
@@ -330,12 +330,20 @@ export async function localAtomicAction<T = any>(
           include: { items: true },
         })
         if (created.status === 'completed') {
+          const quantitiesByVariant = new Map<string, number>()
+          const valueByVariant = new Map<string, number>()
           for (const item of normalized) {
-            const old = variants.find((variant: AnyRecord) => variant.id === item.variantId) as AnyRecord
-            const nextQty = old.quantity + item.quantity
-            const nextCost = nextQty > 0 ? (old.quantity * old.costPrice + item.quantity * item.unitCost) / nextQty : item.unitCost
+            quantitiesByVariant.set(item.variantId, (quantitiesByVariant.get(item.variantId) || 0) + item.quantity)
+            valueByVariant.set(item.variantId, (valueByVariant.get(item.variantId) || 0) + item.quantity * item.unitCost)
+          }
+          for (const [variantId, quantityAdded] of quantitiesByVariant) {
+            const old = variants.find((variant: AnyRecord) => variant.id === variantId) as AnyRecord
+            const nextQty = old.quantity + quantityAdded
+            const nextCost = nextQty > 0
+              ? (old.quantity * old.costPrice + (valueByVariant.get(variantId) || 0)) / nextQty
+              : old.costPrice
             await tx.productVariant.update({
-              where: { id: item.variantId },
+              where: { id: variantId },
               data: { quantity: nextQty, costPrice: nextCost, updatedAt: new Date() },
             })
           }
@@ -362,7 +370,7 @@ export async function localAtomicAction<T = any>(
 
         const purchaseItemMap = new Map(purchase.items.map((item: AnyRecord) => [item.id, item]))
         const returnedRows = await tx.purchaseReturnItem.findMany({
-          where: { purchaseReturn: { purchaseId: purchase.id, status: 'completed' } },
+          where: { purchaseReturn: { is: { purchaseId: purchase.id, status: 'completed' } } },
           select: { variantId: true, quantity: true, purchaseItemId: true },
         })
         const purchasedByVariant = new Map<string, number>()
@@ -390,6 +398,10 @@ export async function localAtomicAction<T = any>(
         }
         const baseSubtotal = normalized.reduce((sum, item) => sum + item.purchaseItem.unitCost * item.quantity, 0)
         const returnTotal = purchase.subtotal > 0 ? baseSubtotal * purchase.total / purchase.subtotal : 0
+        const refundAmount = input.refundAmount == null ? returnTotal : numeric(input.refundAmount, -1)
+        if (!Number.isFinite(refundAmount) || refundAmount < 0 || refundAmount > returnTotal + 0.001) {
+          throw new Error('قيمة الاسترداد غير صحيحة')
+        }
         const quantities = new Map<string, number>()
         for (const item of normalized) quantities.set(item.purchaseItem.variantId, (quantities.get(item.purchaseItem.variantId) || 0) + item.quantity)
         for (const [variantId, quantity] of quantities) {
@@ -409,7 +421,7 @@ export async function localAtomicAction<T = any>(
             notes: input.notes || null,
             status: 'completed',
             refundMethod: input.refundMethod || 'credit',
-            refundAmount: input.refundAmount == null ? returnTotal : Math.min(returnTotal, numeric(input.refundAmount)),
+            refundAmount,
             idempotencyKey: idempotencyKey || null,
             items: {
               create: normalized.map((item) => ({
