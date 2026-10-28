@@ -66,11 +66,16 @@ export async function POST(req: NextRequest) {
       if (data.purchaseId) {
         const purchase = await tx.purchase.findUnique({
           where: { id: data.purchaseId },
-          select: { id: true, supplierId: true, total: true, paid: true, status: true },
+          select: {
+            id: true, supplierId: true, total: true, paid: true, status: true,
+            returns: { where: { status: 'completed' }, select: { total: true } },
+          },
         })
         if (!purchase || purchase.supplierId !== data.supplierId) throw new Error('فاتورة الشراء لا تخص هذا المورد')
         if (purchase.status !== 'completed') throw new Error('لا يمكن سداد فاتورة شراء غير مكتملة')
-        if (data.amount > Math.max(0, purchase.total - purchase.paid) + 0.001) throw new Error('المبلغ يتجاوز المتبقي على فاتورة الشراء')
+        const netReturned = purchase.returns.reduce((sum: number, returned: { total: number }) => sum + returned.total, 0)
+        const outstanding = Math.max(0, purchase.total - purchase.paid - netReturned)
+        if (data.amount > outstanding + 0.001) throw new Error('المبلغ يتجاوز المتبقي على فاتورة الشراء بعد خصم المرتجعات')
       }
 
       const deducted = await tx.supplier.updateMany({
