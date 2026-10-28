@@ -1,31 +1,27 @@
-# طيبة POS — Production Deployment
+# دليل تشغيل طيبة POS محليًا
 
-## Architecture
-- Cloudflare Workers + Next.js (vinext)
-- Google Apps Script Web App
-- Google Sheets = **100% persistent source of truth**
-- Cloudflare KV = short-lived read cache only
-- No SQLite/Prisma database is used in production
+هذا الدليل هو المرجع الحالي لتشغيل المشروع على جهاز المحل. Google Sheets وCloudflare D1 ليسا جزءًا من مصدر البيانات في وضع التشغيل المحلي.
 
-## Required Cloudflare configuration
-Set these as encrypted/secret variables in the Worker:
+## تثبيت وتشغيل
 
-- `GOOGLE_APPS_SCRIPT_URL`
-- `GOOGLE_APPS_SCRIPT_TOKEN`
-- `AUTH_SECRET`
+1. ثبّت Node.js 22.
+2. من مجلد المشروع نفّذ `npm install`.
+3. انسخ `.env.example` إلى `.env` واضبط `AUTH_SECRET` على قيمة عشوائية طويلة لا تستخدمها في مشروع آخر.
+4. نفّذ `npm run db:setup` لإنشاء مخطط قاعدة البيانات في `data/tayba.db`.
+5. نفّذ `npm run dev` للتطوير، أو `npm run build` ثم `npm run start` للتشغيل العادي.
+6. افتح `http://localhost:3000` وأكمل إعداد المستخدم الإداري.
 
-Bind a KV namespace to `VINEXT_KV_CACHE`.
+## مكان البيانات
 
-## Google Apps Script
-1. Open the target Google Sheet.
-2. Extensions → Apps Script.
-3. Paste the complete `public/GoogleAppsScript.gs`.
-4. In Script Properties create `TAYBA_API_TOKEN` with the exact same value as `GOOGLE_APPS_SCRIPT_TOKEN`.
-5. Deploy as Web app, Execute as **Me**, access **Anyone**.
-6. Copy the Web App URL into `GOOGLE_APPS_SCRIPT_URL`.
+- ملف SQLite: `data/tayba.db`
+- النسخ الاحتياطية الكاملة: `backups/tayba-pos-*.db`
+- مسار النسخ الاحتياطي في الواجهة يتيح إنشاء نسخة SQLite وتنزيلها.
+- تصدير Excel تقرير تشغيلي، وليس وسيلة الاستعادة الكاملة.
 
-## First run
-The application creates sheet tabs lazily when needed. Use the Sync page once after deploying to warm the cache and verify connectivity.
+## التحديث والاستعادة
 
-## Important data rule
-Sales, purchases, returns, payments, stock adjustments and settings are persisted in Google Sheets. KV may disappear at any time without data loss.
+أوقف البرنامج أولًا. احتفظ بنسخة منفصلة من ملف SQLite الحالي قبل التحديث أو تنفيذ `npm run db:setup`. لا تضع بيانات المحل في Git أو مجلد `public`. عند نقل نسخة بيانات قديمة، اختبر الاستعادة على نسخة منفصلة وقارن أعداد السجلات والأرصدة والمخزون وإجماليات الفواتير قبل اعتمادها.
+
+## تنبيه
+
+هذه التعليمات تخص الفرع المحلي الجاري اختباره. لا تُحوّل نسخة المحل الحالية إلى هذا الفرع حتى ينجح فحص المخطط والبناء واختبارات البيع والشراء والمرتجعات والمدفوعات والجرد وإغلاق الوردية.
