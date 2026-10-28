@@ -14,10 +14,10 @@ async function verifyUserPin(userId: string, pin: string): Promise<'ok' | 'no-pi
   return verifyPin(pin, row.pinHash) ? 'ok' : 'wrong'
 }
 
-async function summarizeShift(session: { userId: string; openedAt: Date; openingFloat: number }, now: Date) {
+async function summarizeShift(client: any, session: { userId: string; openedAt: Date; openingFloat: number }, now: Date) {
   const range = { gte: session.openedAt, lte: now }
   const [sales, purchases, customerCashAgg, supplierCashAgg, saleRefunds, purchaseRefunds] = await Promise.all([
-    db.sale.findMany({
+    client.sale.findMany({
       where: {
         createdAt: range,
         status: { in: ['completed', 'partial_return', 'returned'] },
@@ -28,26 +28,26 @@ async function summarizeShift(session: { userId: string; openedAt: Date; opening
         customerPayments: { select: { amount: true } },
       },
     }),
-    db.purchase.findMany({
+    client.purchase.findMany({
       where: { createdAt: range, status: 'completed', userId: session.userId },
       select: {
         total: true, paid: true, initialPaid: true, paymentMethod: true,
         supplierPayments: { select: { amount: true } },
       },
     }),
-    db.customerPayment.aggregate({
+    client.customerPayment.aggregate({
       where: { createdAt: range, method: 'cash', userId: session.userId },
       _sum: { amount: true },
     }),
-    db.supplierPayment.aggregate({
+    client.supplierPayment.aggregate({
       where: { createdAt: range, method: 'cash', userId: session.userId },
       _sum: { amount: true },
     }),
-    db.saleReturn.findMany({
+    client.saleReturn.findMany({
       where: { createdAt: range, status: 'completed', refundMethod: 'cash', userId: session.userId },
       select: { total: true, refundAmount: true },
     }),
-    db.purchaseReturn.findMany({
+    client.purchaseReturn.findMany({
       where: { createdAt: range, status: 'completed', refundMethod: 'cash', userId: session.userId },
       select: { refundAmount: true, total: true },
     }),
@@ -98,7 +98,7 @@ export async function GET() {
   const now = new Date()
   const items = await Promise.all(sessions.map(async (session) => {
     if (session.status !== 'open') return session
-    return { ...session, ...(await summarizeShift(session, now)) }
+    return { ...session, ...(await summarizeShift(db, session, now)) }
   }))
   return NextResponse.json({ items })
 }
@@ -138,15 +138,22 @@ export async function PATCH(req: NextRequest) {
     if (pinCheck === 'no-pin') return NextResponse.json({ error: 'لم يتم تحديد رقم سري لك بعد — راجع الإدارة' }, { status: 403 })
     if (pinCheck === 'wrong') return NextResponse.json({ error: 'الرقم السري غير صحيح' }, { status: 403 })
 
-    const session = await db.registerSession.findUnique({ where: { id: parsed.data.sessionId } })
-    if (!session) return NextResponse.json({ error: 'الوردية غير موجودة' }, { status: 404 })
-    if (user.role === 'cashier' && session.userId !== user.id) return NextResponse.json({ error: 'لا تملك هذه الوردية' }, { status: 403 })
-    if (session.status === 'closed') return NextResponse.json({ error: 'الوردية مغلقة بالفعل' }, { status: 409 })
+    const closedResult = await db.$transaction(async (tx: any) => {
+      const session = await tx.registerSession.findUnique({ where: { id: parsed.data.sessionId } })
+      if (!session) throw new Error('REGISTER_SESSION_NOT_FOUND')
+      if (user.role === 'cashier' && session.userId !== user.id) throw new Error('REGISTER_SESSION_FORBIDDEN')
+      if (session.status !== 'open') throw new Error('REGISTER_SESSION_ALREADY_CLOSED')
 
-    const now = new Date()
-    const summary = await summarizeShift(session, now)
-    const difference = parsed.data.closingFloat - summary.expectedCash
-    const updated = await db.$transaction(async (tx: any) => {
+      const now = new Date()
+      // Calculate and persist the drawer totals in one transaction. A sale
+      // that commits first is included; a sale arriving after closure sees
+      // the closed shift inside its own transaction and is rejected.
+      const summary = await summarizeShift(tx, session, now)
+      const difference = parsed.data.closingFloat - summary.expectedCash
+      const closingNote = parsed.data.notes?.trim()
+      const notes = [session.notes?.trim(), closingNote ? `ملاحظات الإغلاق: ${closingNote}` : null]
+        .filter((value): value is string => Boolean(value))
+        .join('\n')
       const closed = await tx.registerSession.updateMany({
         where: { id: session.id, status: 'open' },
         data: {
@@ -157,24 +164,29 @@ export async function PATCH(req: NextRequest) {
           cashSales: summary.cashSales,
           cardSales: summary.cardSales,
           transferSales: summary.transferSales,
-          notes: parsed.data.notes || null,
+          notes: notes || null,
           status: 'closed',
         },
       })
-      if (closed.count !== 1) throw new Error('تم إغلاق الوردية بالفعل أو تغيرت حالتها؛ حدّث الصفحة')
-      return tx.registerSession.findUnique({ where: { id: session.id } })
+      if (closed.count !== 1) throw new Error('REGISTER_SESSION_ALREADY_CLOSED')
+      const updated = await tx.registerSession.findUnique({ where: { id: session.id } })
+      return { updated, summary, difference, closedAt: now }
     })
+
     const report = {
-      ...summary,
-      sessionId: session.id,
+      ...closedResult.summary,
+      sessionId: parsed.data.sessionId,
       closingFloat: parsed.data.closingFloat,
-      difference,
-      closedAt: now.toISOString(),
+      difference: closedResult.difference,
+      closedAt: closedResult.closedAt.toISOString(),
     }
-    await auditLog({ user, action: 'register_close', entity: 'registerSession', entityId: session.id, after: report })
-    return NextResponse.json({ ...updated, report })
+    await auditLog({ user, action: 'register_close', entity: 'registerSession', entityId: parsed.data.sessionId, after: report })
+    return NextResponse.json({ ...closedResult.updated, report })
   } catch (e: unknown) {
     const message = e instanceof Error ? e.message : 'خطأ'
-    return NextResponse.json({ error: message }, { status: /إغلاق الوردية بالفعل|تغيرت حالتها/i.test(message) ? 409 : 500 })
+    if (message === 'REGISTER_SESSION_NOT_FOUND') return NextResponse.json({ error: 'الوردية غير موجودة' }, { status: 404 })
+    if (message === 'REGISTER_SESSION_FORBIDDEN') return NextResponse.json({ error: 'لا تملك هذه الوردية' }, { status: 403 })
+    if (message === 'REGISTER_SESSION_ALREADY_CLOSED') return NextResponse.json({ error: 'الوردية مغلقة بالفعل أو تغيرت حالتها؛ حدّث الصفحة' }, { status: 409 })
+    return NextResponse.json({ error: message }, { status: 500 })
   }
 }
