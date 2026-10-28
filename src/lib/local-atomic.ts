@@ -336,6 +336,7 @@ export async function localAtomicAction<T = any>(
         const total = taxable + taxAmount
         const paid = numeric(input.paid)
         if (paid < 0) throw new Error('المبلغ المدفوع غير صحيح')
+        if (paid > total + 0.001) throw new Error('المبلغ المدفوع للمورد يتجاوز إجمالي فاتورة الشراء')
 
         const purchaseId = id()
         const created = await tx.purchase.create({
