@@ -121,7 +121,7 @@ export async function localAtomicAction<T = any>(
         const normalized = items.map((item: AnyRecord) => ({
           variantId: String(item.variantId || ''),
           quantity: requiredPositiveInt(item.quantity, 'الكمية'),
-          unitPrice: money(numeric(item.unitPrice, -1)),
+          unitPrice: numeric(item.unitPrice, -1),
         }))
         if (normalized.some((item) => !item.variantId || item.unitPrice < 0)) {
           throw new Error('بيانات المنتجات أو الأسعار غير صحيحة')
@@ -325,7 +325,7 @@ export async function localAtomicAction<T = any>(
         const normalized = items.map((item: AnyRecord) => ({
           variantId: String(item.variantId || ''),
           quantity: requiredPositiveInt(item.quantity, 'الكمية'),
-          unitCost: money(numeric(item.unitCost, -1)),
+          unitCost: numeric(item.unitCost, -1),
           enteredQuantity: numeric(item.enteredQuantity, numeric(item.quantity)),
           unit: String(item.unit || 'piece'),
           unitFactor: Math.max(1, Math.trunc(numeric(item.unitFactor, 1))),
