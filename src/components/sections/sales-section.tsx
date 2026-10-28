@@ -59,6 +59,15 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const productsQuery = useQuery<{ items: Product[] }>({ queryKey: ['pos-products'], queryFn: async () => { const r = await fetch('/api/products?pageSize=500'); if (!r.ok) throw new Error('products'); return r.json() }, staleTime: 30000 })
   const customersQuery = useQuery<Customer[]>({ queryKey: ['customers'], queryFn: async () => { const r = await fetch('/api/customers'); if (!r.ok) throw new Error('customers'); return r.json() }, staleTime: 30000 })
   const salesQuery = useQuery<{ items: Sale[] }>({ queryKey: ['sales'], queryFn: async () => { const r = await fetch('/api/sales?pageSize=100'); if (!r.ok) throw new Error('sales'); return r.json() } })
+  const pricingSettingsQuery = useQuery<{ vatEnabled: boolean; vatRate: number; vatInclusive: boolean; currency: string }>({
+    queryKey: ['pos-pricing-settings'],
+    queryFn: async () => {
+      const response = await fetch('/api/pos-settings', { cache: 'no-store' })
+      if (!response.ok) throw new Error('تعذر تحميل إعدادات الضريبة؛ لا تعتمد فاتورة بإجمالي غير معروف')
+      return response.json()
+    },
+    staleTime: 60_000,
+  })
 
   const products = productsQuery.data?.items || []
   const customers = customersQuery.data || []
@@ -83,10 +92,20 @@ export function SalesSection({ user }: { user: SessionUser }) {
   }, [products, search, category])
 
   const selectedCustomer = customers.find(c => c.id === customerId)
-  const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0)
-  const total = Math.max(0, subtotal - discount)
-  const change = Math.max(0, paid - total)
-  const remaining = Math.max(0, total - paid)
+  const roundCurrencyAmount = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
+  const subtotal = roundCurrencyAmount(cart.reduce((sum, item) => sum + roundCurrencyAmount(item.price * item.quantity), 0))
+  const discountAmount = roundCurrencyAmount(discount)
+  const taxable = roundCurrencyAmount(Math.max(0, subtotal - discountAmount))
+  const vatEnabled = pricingSettingsQuery.data?.vatEnabled === true
+  const vatRate = Math.max(0, Math.min(100, Number(pricingSettingsQuery.data?.vatRate) || 0))
+  const vatInclusive = pricingSettingsQuery.data?.vatInclusive === true
+  const taxAmount = roundCurrencyAmount(vatEnabled
+    ? (vatInclusive ? taxable - taxable / (1 + vatRate / 100) : taxable * vatRate / 100)
+    : 0)
+  const total = roundCurrencyAmount(vatEnabled && vatInclusive ? taxable : taxable + taxAmount)
+  const paidAmount = roundCurrencyAmount(paid)
+  const change = roundCurrencyAmount(Math.max(0, paidAmount - total))
+  const remaining = roundCurrencyAmount(Math.max(0, total - paidAmount))
 
   const saveCustomer = useMutation({
     mutationFn: async (data: { name: string; phone: string }) => { const r = await fetch('/api/customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'تعذر إضافة العميل'); return j },
@@ -144,15 +163,18 @@ export function SalesSection({ user }: { user: SessionUser }) {
   function quickPay(m: 'cash' | 'card' | 'transfer' | 'credit') { setPaymentMethod(m); setPaid(m === 'credit' ? 0 : total) }
 
   function submit() {
+    if (pricingSettingsQuery.isLoading || !pricingSettingsQuery.data) return toast.error('جاري تحميل إعدادات الضريبة؛ حاول بعد اكتمال التحميل')
+    if (pricingSettingsQuery.isError) return toast.error('تعذر تحميل إعدادات الضريبة؛ لم يتم حفظ الفاتورة')
     if (!cart.length) return toast.error('أضف صنفًا أولًا')
-    if (discount > subtotal) return toast.error('الخصم أكبر من الإجمالي')
+    if (discountAmount > subtotal) return toast.error('الخصم أكبر من الإجمالي')
     if (paymentMethod === 'credit' && !customerId) return toast.error('اختر العميل للبيع الآجل')
-    if (paymentMethod !== 'credit' && paid < total) return toast.error('المبلغ المدفوع غير مكتمل')
+    if (paymentMethod !== 'credit' && paidAmount < total) return toast.error('المبلغ المدفوع غير مكتمل')
+    if (paymentMethod !== 'cash' && paidAmount > total) return toast.error('المبلغ المدفوع لا يمكن أن يتجاوز الإجمالي لهذه الطريقة')
     const payload = {
       customerId: customerId || undefined,
       date: (historical && user.role !== 'cashier') ? saleDate : undefined,
-      discount,
-      paid: paymentMethod === 'credit' ? 0 : paid,
+      discount: discountAmount,
+      paid: paymentMethod === 'credit' ? 0 : paidAmount,
       paymentMethod,
       status: 'completed',
       items: cart.map(i => ({ variantId: i.variantId, quantity: i.quantity * i.factor, unitPrice: i.price / i.factor })),
@@ -251,9 +273,10 @@ export function SalesSection({ user }: { user: SessionUser }) {
         <div className="shrink-0 border-t bg-card p-2.5 pb-[max(.65rem,env(safe-area-inset-bottom))]">
           <div className="flex items-stretch gap-2">
             <div className="flex shrink-0 flex-col items-center justify-center rounded-2xl border px-3 text-[11px]"><span className="text-muted-foreground">الخصم</span><input type="number" min={0} value={discount} onChange={e => setDiscount(Math.max(0, Number(e.target.value) || 0))} className="w-14 bg-transparent text-center font-black outline-none" /></div>
-            <div className="flex flex-1 items-center justify-between rounded-2xl bg-primary px-3 py-2 text-primary-foreground"><span className="text-xs font-bold opacity-90">الإجمالي</span><span className="text-xl font-black tabular-nums">{money(total)}</span></div>
+            {vatEnabled && <div className="flex items-center justify-between rounded-xl border px-3 py-2 text-sm"><span>{vatInclusive ? 'ضريبة القيمة المضافة (ضمن السعر)' : 'ضريبة القيمة المضافة'}</span><b>{money(taxAmount)}</b></div>}
+          <div className="flex flex-1 items-center justify-between rounded-2xl bg-primary px-3 py-2 text-primary-foreground"><span className="text-xs font-bold opacity-90">الإجمالي</span><span className="text-xl font-black tabular-nums">{money(total)}</span></div>
           </div>
-          <Button type="button" className="mt-1.5 h-12 w-full rounded-2xl text-base font-black" disabled={!cart.length || saveSale.isPending} onClick={() => { setPaid(total); setCheckout(true) }}>{saveSale.isPending ? 'جارٍ الحفظ...' : 'إنهاء الفاتورة'}</Button>
+          <Button type="button" className="mt-1.5 h-12 w-full rounded-2xl text-base font-black" disabled={!cart.length || saveSale.isPending || pricingSettingsQuery.isLoading || pricingSettingsQuery.isError} onClick={() => { setPaid(total); setCheckout(true) }}>{saveSale.isPending ? 'جارٍ الحفظ...' : 'إنهاء الفاتورة'}</Button>
         </div>
       </div>
     </div>
