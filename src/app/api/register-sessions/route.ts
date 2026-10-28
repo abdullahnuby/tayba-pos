@@ -49,7 +49,7 @@ async function summarizeShift(session: { userId: string; openedAt: Date; opening
     }),
     db.purchaseReturn.findMany({
       where: { createdAt: range, status: 'completed', refundMethod: 'cash', userId: session.userId },
-      select: { refundAmount: true },
+      select: { refundAmount: true, total: true },
     }),
   ])
 
