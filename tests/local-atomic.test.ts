@@ -580,3 +580,67 @@ test('bulk stock adjustment is all-or-nothing if one variant is invalid', async 
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity)
   assert.equal(await db.stockAdjustment.count(), beforeCount)
 })
+test('voiding a sale is blocked when customer collections are not allocated to invoices', async () => {
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      customerId,
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 0,
+      paymentMethod: 'credit',
+      status: 'completed',
+      idempotencyKey: 'ci-void-sale-unallocated-payment',
+    },
+  })
+  await db.customer.update({ where: { id: customerId }, data: { balance: { decrement: 5 } } })
+  await db.customerPayment.create({
+    data: {
+      customerId,
+      saleId: null,
+      amount: 5,
+      method: 'cash',
+      notes: 'unallocated payment for CI test',
+    },
+  })
+  const stockBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  await assert.rejects(
+    localAtomicAction(db, 'void_sale', { payload: { saleId: sale.id, voidReason: 'CI unallocated collection' } }),
+    /تحصيلات للعميل غير موزعة على فواتير/,
+  )
+  assert.equal((await db.sale.findUniqueOrThrow({ where: { id: sale.id } })).status, 'completed')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, stockBefore)
+})
+
+test('voiding a purchase is blocked when supplier payments are not allocated to invoices', async () => {
+  const balanceBefore = (await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      idempotencyKey: 'ci-void-purchase-unallocated-payment',
+      supplierId,
+      items: [{ variantId, quantity: 1, unitCost: 10, enteredQuantity: 1, unit: 'piece', unitFactor: 1 }],
+      discount: 0,
+      paid: 0,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  await db.supplier.update({ where: { id: supplierId }, data: { balance: { decrement: 5 } } })
+  await db.supplierPayment.create({
+    data: {
+      supplierId,
+      purchaseId: null,
+      amount: 5,
+      method: 'cash',
+      notes: 'unallocated payment for CI test',
+    },
+  })
+  const stockBefore = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  await assert.rejects(
+    localAtomicAction(db, 'void_purchase', { payload: { purchaseId: purchase.id, voidReason: 'CI unallocated payment' } }),
+    /دفعات للمورد غير موزعة على فواتير/,
+  )
+  assert.equal((await db.purchase.findUniqueOrThrow({ where: { id: purchase.id } })).status, 'completed')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, stockBefore)
+  assert.equal((await db.supplier.findUniqueOrThrow({ where: { id: supplierId } })).balance, balanceBefore + 5)
+})
+
