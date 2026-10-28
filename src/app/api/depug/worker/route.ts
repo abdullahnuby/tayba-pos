@@ -1,6 +1,9 @@
+import { NextResponse } from 'next/server'
+import { getCurrentUser } from '@/lib/auth'
+
 /**
- * TEMPORARY diagnostic endpoint for Cloudflare Worker runtime failures.
- * Returns only sanitized runtime/configuration information.
+ * TEMPORARY diagnostic endpoint for runtime failures.
+ * Returns sanitized runtime/configuration information to administrators only.
  */
 
 export const runtime = 'edge'
