@@ -10,7 +10,7 @@ generator client {
 
 datasource db {
   provider = "sqlite"
-  url      = "file:../data/tayba.db"
+  url      = env("DATABASE_URL")
 }
 
 // ------------------------------------------------------------
