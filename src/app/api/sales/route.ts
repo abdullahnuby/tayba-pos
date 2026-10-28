@@ -6,7 +6,7 @@ import { auditLog } from '@/lib/audit'
 import { checkSaleItemPrice } from '@/lib/pricing'
 
 const item = z.object({ variantId: z.string().min(1), quantity: z.number().int().positive(), unitPrice: z.number().min(0.01) })
-const schema = z.object({ customerId: z.string().optional().nullable(), date: z.string().optional(), discount: z.number().min(0).default(0), paymentMethod: z.enum(['cash','card','transfer','credit']).default('cash'), paid: z.number().min(0).default(0), notes: z.string().optional().nullable(), status: z.enum(['draft','completed']).default('completed'), managerPin: z.string().optional(), items: z.array(item).min(1), idempotencyKey: z.string().max(120).optional() })
+const schema = z.object({ customerId: z.string().optional().nullable(), date: z.string().optional(), discount: z.number().min(0).default(0), paymentMethod: z.enum(['cash','card','transfer','credit']).default('cash'), paid: z.number().min(0).default(0), notes: z.string().optional().nullable(), status: z.enum(['draft','completed']).default('completed'), managerPin: z.string().optional(), items: z.array(item).min(1), idempotencyKey: z.string().min(8).max(120).optional() })
 
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser()
@@ -29,6 +29,8 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
     const data = schema.parse(await req.json())
+    const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
 
     if (user.role === 'cashier') {
       const open = await db.registerSession.findFirst({ where: { userId: user.id, status: 'open' } })
@@ -62,16 +64,16 @@ export async function POST(req: NextRequest) {
     if (user.role === 'cashier' && !managerOverride && data.discount > subtotal * 0.1) return NextResponse.json({ error: 'خصم أكثر من 10% يحتاج موافقة المدير' }, { status: 403 })
 
     // Prevent accidental repeated POSTs in the same short window when the browser retries.
-    if (data.idempotencyKey) {
+    if (idempotencyKey) {
       const recent = await db.sale.findFirst({
-        where: { userId: user.id, notes: { contains: `[idem:${data.idempotencyKey}]` } },
+        where: { userId: user.id, OR: [{ idempotencyKey }, { notes: { contains: `[idem:${rawIdempotencyKey}]` } }] },
         orderBy: { date: 'desc' },
         include: { customer: true, items: { include: { variant: { include: { product: true } } } } },
       })
       if (recent) return NextResponse.json(recent, { status: 200 })
     }
 
-    const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount: data.discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, notes: `${data.notes || ''}${data.idempotencyKey ? ` [idem:${data.idempotencyKey}]` : ''}`.trim() || null, items: data.items } })
+    const result = await atomicAction('commit_sale', { payload: { userId: user.id, customerId: data.customerId || null, date: data.date || new Date().toISOString(), subtotal, discount, paid: data.paid, paymentMethod: data.paymentMethod, status: data.status, idempotencyKey, notes: `${data.notes || ''}${rawIdempotencyKey ? ` [idem:${rawIdempotencyKey}]` : ''}`.trim() || null, items: data.items } })
     // atomicAction returns the raw created rows (no relations) — re-fetch with the same
     // includes used everywhere else (customer, items.variant.product) so the receipt screen
     // that renders immediately after checkout has the fields it expects instead of crashing
