@@ -39,6 +39,10 @@ jobs:
           DATABASE_URL: file:../data/tayba-test.db
           ALLOW_TAYBA_TEST_DATABASE: "1"
         run: npm run test:atomic
+      - name: Test safe schema-upgrade backup and data preservation
+        env:
+          ALLOW_TAYBA_SETUP_TEST: "1"
+        run: node --test tests/safe-db-setup.test.mjs
       - name: TypeScript check
         run: npx tsc --noEmit
       - name: Lint
