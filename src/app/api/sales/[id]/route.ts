@@ -19,6 +19,8 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         phone: sale.customer.phone,
       } : null,
       items: sale.items.map((item) => {
+        const safeItem: Record<string, any> = { ...item }
+        delete safeItem.unitCost
         const safeVariant: Record<string, unknown> = { ...item.variant }
         delete safeVariant.costPrice
         delete safeVariant.minQuantity
@@ -26,7 +28,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
         delete safeVariant.purchaseUnit
         delete safeVariant.purchaseUnitFactor
         delete safeVariant.baseUnit
-        return { ...item, variant: safeVariant }
+        return { ...safeItem, variant: safeVariant }
       }),
       returns: [],
       customerPayments: [],
