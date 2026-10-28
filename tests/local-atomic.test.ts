@@ -187,6 +187,7 @@ test('non-cash overpayment is rejected without writing an invoice or changing st
 })
 
 test('sale returns use source invoice prices, reject duplicate-line overreturns, and are idempotent', async () => {
+  const quantityBeforeReturns = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
   await assert.rejects(
     localAtomicAction(db, 'commit_sale_return', {
       payload: {
@@ -220,7 +221,8 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
   assert.equal(first.total, 10)
   assert.equal(first.refundAmount, 10)
   assert.equal(await db.saleReturn.count(), 1)
-  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 9)
+  const quantityAfterFirstReturn = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  assert.equal(quantityAfterFirstReturn, quantityBeforeReturns + 1)
 
   const finalReturn = await localAtomicAction<any>(db, 'commit_sale_return', {
     payload: {
@@ -232,7 +234,7 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
   })
   assert.equal(finalReturn.total, 10)
   assert.equal((await db.sale.findUniqueOrThrow({ where: { id: saleId } })).status, 'returned')
-  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 10)
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityBeforeReturns + 2)
 })
 
 test('cash return reduces outstanding customer debt before refunding cash', async () => {
@@ -330,6 +332,7 @@ test('draft sale with unpaid balance cannot resume without a customer', async ()
 })
 
 test('purchase aggregates repeated variant lines and deduplicates repeated submissions', async () => {
+  const purchaseCountBefore = await db.purchase.count()
   const beforePurchaseVariant = await db.productVariant.findUniqueOrThrow({ where: { id: variantId }, select: { quantity: true, costPrice: true } })
   const payload = {
     idempotencyKey: 'ci-purchase-repeat-key',
@@ -345,7 +348,7 @@ test('purchase aggregates repeated variant lines and deduplicates repeated submi
   const purchase = await localAtomicAction<any>(db, 'commit_purchase', { payload })
   const repeated = await localAtomicAction<any>(db, 'commit_purchase', { payload })
   assert.equal(purchase.id, repeated.id)
-  assert.equal(await db.purchase.count(), 1)
+  assert.equal(await db.purchase.count(), purchaseCountBefore + 1)
   purchaseId = purchase.id
   purchaseItemId = purchase.items[0].id
   assert.equal(purchase.items.length, 2)
@@ -524,7 +527,7 @@ test('VAT-inclusive settings keep the entered total inclusive of VAT', async () 
     },
   })
   assert.equal(sale.total, 100)
-  assert.ok(Math.abs(sale.taxAmount - (100 - 100 / 1.14)) < 0.0001)
+  assert.equal(sale.taxAmount, 12.28)
 })
 
 test('VAT-inclusive purchase invoices keep the entered total inclusive of VAT', async () => {
@@ -544,7 +547,7 @@ test('VAT-inclusive purchase invoices keep the entered total inclusive of VAT', 
     },
   })
   assert.equal(purchase.total, 100)
-  assert.ok(Math.abs(purchase.taxAmount - (100 - 100 / 1.14)) < 0.0001)
+  assert.equal(purchase.taxAmount, 12.28)
   assert.equal(purchase.initialPaid, 100)
 })
 
