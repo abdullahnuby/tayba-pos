@@ -37,7 +37,7 @@ function TouchNumberPad({ value, onChange, onDone }: { value: number; onChange: 
   }
   return <div className="rounded-3xl border bg-muted/20 p-3 select-none touch-manipulation">
     <div className="mb-3 flex h-14 items-center justify-between rounded-2xl bg-background px-4 text-2xl font-black tabular-nums"><span>{raw || '0'}</span><span className="text-sm font-semibold text-muted-foreground">ج.م</span></div>
-    <div className="grid grid-cols-3 gap-2">
+    <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
       {['1','2','3','4','5','6','7','8','9','.','0','back'].map(k => <Button key={k} type="button" variant="outline" className="h-14 rounded-2xl text-xl font-black" onClick={() => press(k)}>{k === 'back' ? '⌫' : k}</Button>)}
     </div>
     <div className="mt-2 grid grid-cols-2 gap-2"><Button type="button" variant="outline" className="h-12 rounded-2xl" onClick={() => press('clear')}>مسح</Button><Button type="button" className="h-12 rounded-2xl" onClick={onDone}><Check className="me-1"/> تم</Button></div>
@@ -147,6 +147,15 @@ export function PurchasesSection() {
   const purchases = purchasesData?.items || []
   const { data: productsData } = useQuery<{ items: { id: string; name: string; variants: Variant[] }[] }>({ queryKey: ['products-for-purchases'], queryFn: async () => (await fetch('/api/products?pageSize=500')).json() })
   const { data: suppliers = [] } = useQuery<Supplier[]>({ queryKey: ['suppliers'], queryFn: async () => (await fetch('/api/suppliers')).json() })
+  const pricingSettingsQuery = useQuery<{ vatEnabled: boolean; vatRate: number; vatInclusive: boolean; currency: string }>({
+    queryKey: ['pos-pricing-settings'],
+    queryFn: async () => {
+      const response = await fetch('/api/pos-settings', { cache: 'no-store' })
+      if (!response.ok) throw new Error('تعذر تحميل إعدادات الضريبة؛ لا تعتمد فاتورة بإجمالي غير معروف')
+      return response.json()
+    },
+    staleTime: 60_000,
+  })
   const { data: purchaseReturnsData, isLoading: purchaseReturnsLoading, isError: purchaseReturnsError } = useQuery<{ items: PurchaseReturnRecord[] }>({
     queryKey: ['purchase-returns', returningPurchase?.id],
     queryFn: async () => {
@@ -191,9 +200,21 @@ export function PurchasesSection() {
     return allVariants.filter(v => !q || v.productName.toLowerCase().includes(q) || v.sku.toLowerCase().includes(q)).slice(0, 60)
   }, [allVariants, productFilter])
   const filteredPurchases = purchases.filter(p => !search || p.invoiceNo.toLowerCase().includes(search.toLowerCase()) || p.supplier?.name.toLowerCase().includes(search.toLowerCase()))
-  const subtotal = items.reduce((s, i) => s + i.enteredQuantity * i.unitCost, 0)
-  const total = Math.max(0, subtotal - discount)
-  const remaining = Math.max(0, total - paid)
+  const roundCurrencyAmount = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
+  const subtotal = roundCurrencyAmount(items.reduce((sum, item) => (
+    sum + roundCurrencyAmount(item.enteredQuantity * item.unitCost)
+  ), 0))
+  const discountAmount = roundCurrencyAmount(discount)
+  const taxable = roundCurrencyAmount(Math.max(0, subtotal - discountAmount))
+  const vatEnabled = pricingSettingsQuery.data?.vatEnabled === true
+  const vatRate = Math.max(0, Math.min(100, Number(pricingSettingsQuery.data?.vatRate) || 0))
+  const vatInclusive = pricingSettingsQuery.data?.vatInclusive === true
+  const taxAmount = roundCurrencyAmount(vatEnabled
+    ? (vatInclusive ? taxable - taxable / (1 + vatRate / 100) : taxable * vatRate / 100)
+    : 0)
+  const total = roundCurrencyAmount(vatEnabled && vatInclusive ? taxable : taxable + taxAmount)
+  const paidAmount = roundCurrencyAmount(paid)
+  const remaining = roundCurrencyAmount(Math.max(0, total - paidAmount))
 
   const createMutation = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
@@ -300,9 +321,9 @@ export function PurchasesSection() {
           </CardContent></Card> })}</section>
         </div>
 
-        <aside className="lg:sticky lg:top-0 lg:h-fit"><Card className="rounded-3xl border-2 overflow-hidden"><CardContent className="p-0"><div className="border-b bg-muted/30 p-4"><div className="flex items-center gap-2"><Calculator className="size-5 text-primary"/><h3 className="font-black">ملخص الفاتورة</h3></div></div><div className="space-y-3 p-4"><div className="flex justify-between"><span>قبل الخصم</span><b>{money(subtotal)}</b></div><button type="button" className="flex w-full items-center justify-between rounded-2xl border p-3 text-right" onClick={() => setMoneyEditor('discount')}><span>الخصم</span><b>{money(discount)}</b></button><div className="flex items-center justify-between rounded-2xl bg-primary/10 p-4"><span className="font-bold">الصافي</span><b className="text-2xl font-black">{money(total)}</b></div><button type="button" className="flex w-full items-center justify-between rounded-2xl border p-3 text-right" onClick={() => setMoneyEditor('paid')}><span className="flex items-center gap-2"><Banknote className="size-5"/> المدفوع</span><b>{money(paid)}</b></button><div className="rounded-2xl bg-muted/50 p-3"><div className="flex justify-between text-sm"><span>المتبقي للمورد</span><b>{money(remaining)}</b></div></div><div><div className="mb-2 text-sm font-bold">طريقة الدفع</div><div className="grid grid-cols-3 gap-2">{[['cash','💵 نقدي'],['card','💳 بطاقة'],['transfer','🔄 تحويل']].map(([id,label]) => <button key={id} type="button" onClick={() => setPaymentMethod(id)} className={`h-14 rounded-2xl border text-sm font-bold ${paymentMethod === id ? 'border-primary bg-primary/10 ring-2 ring-primary/20' : ''}`}>{label}</button>)}</div></div><button type="button" className="h-12 w-full rounded-2xl border p-3 text-right text-sm" onClick={() => setNotes(notes ? '' : 'تمت المراجعة')}>📝 {notes || 'إضافة ملاحظة'}</button></div></CardContent></Card></aside>
+        <aside className="lg:sticky lg:top-0 lg:h-fit"><Card className="rounded-3xl border-2 overflow-hidden"><CardContent className="p-0"><div className="border-b bg-muted/30 p-4"><div className="flex items-center gap-2"><Calculator className="size-5 text-primary"/><h3 className="font-black">ملخص الفاتورة</h3></div></div><div className="space-y-3 p-4"><div className="flex justify-between"><span>قبل الخصم</span><b>{money(subtotal)}</b></div><button type="button" className="flex w-full items-center justify-between rounded-2xl border p-3 text-right" onClick={() => setMoneyEditor('discount')}><span>الخصم</span><b>{money(discount)}</b></button>{vatEnabled && <div className="flex justify-between text-sm"><span>{vatInclusive ? 'ضريبة القيمة المضافة (ضمن السعر)' : 'ضريبة القيمة المضافة'}</span><b>{money(taxAmount)}</b></div>}<div className="flex items-center justify-between rounded-2xl bg-primary/10 p-4"><span className="font-bold">الصافي</span><b className="text-2xl font-black">{money(total)}</b></div><button type="button" className="flex w-full items-center justify-between rounded-2xl border p-3 text-right" onClick={() => setMoneyEditor('paid')}><span className="flex items-center gap-2"><Banknote className="size-5"/> المدفوع</span><b>{money(paid)}</b></button><div className="rounded-2xl bg-muted/50 p-3"><div className="flex justify-between text-sm"><span>المتبقي للمورد</span><b>{money(remaining)}</b></div></div><div><div className="mb-2 text-sm font-bold">طريقة الدفع</div><div className="grid grid-cols-3 gap-2">{[['cash','💵 نقدي'],['card','💳 بطاقة'],['transfer','🔄 تحويل'],['credit','📒 آجل']].map(([id,label]) => <button key={id} type="button" onClick={() => { setPaymentMethod(id); setPaid(id === 'credit' ? 0 : total) }} className={`h-14 rounded-2xl border text-sm font-bold ${paymentMethod === id ? 'border-primary bg-primary/10 ring-2 ring-primary/20' : ''}`}>{label}</button>)}</div></div><button type="button" className="h-12 w-full rounded-2xl border p-3 text-right text-sm" onClick={() => setNotes(notes ? '' : 'تمت المراجعة')}>📝 {notes || 'إضافة ملاحظة'}</button></div></CardContent></Card></aside>
       </div></div>
-      <div className="shrink-0 border-t bg-background p-3"><div className="mx-auto flex max-w-6xl gap-2"><Button variant="outline" className="h-14 flex-1 rounded-2xl text-base" onClick={() => setOpen(false)}>إلغاء</Button><Button className="h-14 flex-[2] rounded-2xl text-base font-black" onClick={submit} disabled={createMutation.isPending || !items.length || !supplierId}><Wallet className="me-2"/>{createMutation.isPending ? 'جاري الحفظ...' : `حفظ الفاتورة · ${money(total)}`}</Button></div></div>
+      <div className="shrink-0 border-t bg-background p-3"><div className="mx-auto flex max-w-6xl gap-2"><Button variant="outline" className="h-14 flex-1 rounded-2xl text-base" onClick={() => setOpen(false)}>إلغاء</Button><Button className="h-14 flex-[2] rounded-2xl text-base font-black" onClick={submit} disabled={createMutation.isPending || !items.length || !supplierId || pricingSettingsQuery.isLoading || pricingSettingsQuery.isError}><Wallet className="me-2"/>{createMutation.isPending ? 'جاري الحفظ...' : `حفظ الفاتورة · ${money(total)}`}</Button></div></div>
     </div></DialogContent></Dialog>
 
     <Dialog open={!!moneyEditor} onOpenChange={() => { setMoneyEditor(null); setEditingLine(null) }}><DialogContent className="w-[calc(100vw-1rem)] max-w-md rounded-3xl p-4"><DialogHeader><DialogTitle>{moneyEditor === 'price' ? 'تعديل سعر الوحدة' : moneyEditor === 'qty' ? 'إدخال الكمية' : moneyEditor === 'discount' ? 'إدخال الخصم' : 'إدخال المدفوع'}</DialogTitle><DialogDescription>لوحة أرقام Touch — لا تحتاج لوحة مفاتيح الجهاز</DialogDescription></DialogHeader><TouchNumberPad value={moneyEditor === 'price' && editingLine !== null ? items[editingLine]?.unitCost || 0 : moneyEditor === 'qty' && editingLine !== null ? items[editingLine]?.enteredQuantity || 0 : moneyEditor === 'discount' ? discount : paid} onChange={n => { if (moneyEditor === 'price' && editingLine !== null) update(editingLine, { unitCost: n }); else if (moneyEditor === 'qty' && editingLine !== null) { const q = Math.max(1, Math.round(n)); update(editingLine, { enteredQuantity: q, quantity: q * items[editingLine].unitFactor }) } else if (moneyEditor === 'discount') setDiscount(n); else if (moneyEditor === 'paid') setPaid(n) }} onDone={() => { setMoneyEditor(null); setEditingLine(null) }}/></DialogContent></Dialog>
