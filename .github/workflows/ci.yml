@@ -1,9 +1,6 @@
 name: Local POS quality checks
 
 on:
-  push:
-    branches:
-      - local-only-hardening
   pull_request:
     branches:
       - main
@@ -16,7 +13,6 @@ jobs:
     env:
       AUTH_SECRET: ci-only-do-not-use-in-production
       DATABASE_URL: file:../data/tayba.db
-      NODE_ENV: development
     steps:
       - name: Checkout
         uses: actions/checkout@v4
