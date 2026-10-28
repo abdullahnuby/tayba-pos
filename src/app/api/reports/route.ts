@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser } from '@/lib/auth'
-import { recognizedLineRevenue, recognizedSaleRevenue } from '@/lib/reporting'
+import { recognizedLineRevenue, recognizedReturnRevenue, recognizedSaleRevenue } from '@/lib/reporting'
 
 const money = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
 const dayKey = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
@@ -67,7 +67,7 @@ export async function GET(req: NextRequest) {
 
   const recognizedSales = sales.reduce((sum, sale) => sum + recognizedSaleRevenue(sale), 0)
   const recognizedReturns = returns.reduce((sum, returned) => (
-    sum + returned.items.reduce((lineSum, item) => lineSum + recognizedLineRevenue(returned.sale, item), 0)
+    sum + recognizedReturnRevenue(returned.sale, returned.total)
   ), 0)
   const recognizedNetSales = recognizedSales - recognizedReturns
 
@@ -99,11 +99,14 @@ export async function GET(req: NextRequest) {
 
   for (const returned of returns) {
     methods.set(returned.sale.paymentMethod, (methods.get(returned.sale.paymentMethod) || 0) - returned.total)
+    const returnBasis = returned.items.reduce((sum, item) => sum + item.unitPrice * item.quantity, 0)
+    const recognizedReturn = recognizedReturnRevenue(returned.sale, returned.total)
     for (const item of returned.items) {
       const row = best.get(item.variantId) || {
         id: item.variantId, name: item.variant.product.name, qty: 0, revenue: 0, profit: 0,
       }
-      const refundedRevenue = recognizedLineRevenue(returned.sale, item)
+      const lineBasis = item.unitPrice * item.quantity
+      const refundedRevenue = returnBasis > 0 ? recognizedReturn * lineBasis / returnBasis : 0
       const costReturned = item.saleItem.unitCost * item.quantity
       row.qty -= item.quantity
       row.revenue -= refundedRevenue
@@ -136,7 +139,7 @@ export async function GET(req: NextRequest) {
     const row = daily.get(dayKey(returned.date))
     if (row) {
       row.returns += returned.total
-      row.profit += returned.items.reduce((sum, item) => sum + item.saleItem.unitCost * item.quantity - recognizedLineRevenue(returned.sale, item), 0)
+      row.profit += returned.items.reduce((sum, item) => sum + item.saleItem.unitCost * item.quantity, 0) - recognizedReturnRevenue(returned.sale, returned.total)
     }
   }
   for (const returned of purchaseReturns) {
