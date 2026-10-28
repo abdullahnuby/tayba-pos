@@ -11,7 +11,7 @@
     "db:push": "prisma db push",
     "db:generate": "prisma generate",
     "db:reset": "echo \"Refusing automatic database reset. Back up and use an explicit local restore procedure.\" && exit 1",
-    "db:setup": "prisma db push",
+    "db:setup": "node scripts/safe-db-setup.mjs",
     "db:studio": "prisma studio",
     "test:atomic": "node --experimental-strip-types --test tests/local-atomic.test.ts"
   },
