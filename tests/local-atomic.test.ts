@@ -106,6 +106,25 @@ test('sale rejects insufficient stock without partially writing', async () => {
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityBefore)
 })
 
+test('non-cash overpayment is rejected without writing an invoice or changing stock', async () => {
+  const beforeCount = await db.sale.count()
+  const beforeQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  await assert.rejects(
+    localAtomicAction(db, 'commit_sale', {
+      payload: {
+        items: [{ variantId, quantity: 1, unitPrice: 10 }],
+        discount: 0,
+        paid: 11,
+        paymentMethod: 'card',
+        status: 'completed',
+      },
+    }),
+    /لا يمكن تسجيل زيادة مدفوعة/,
+  )
+  assert.equal(await db.sale.count(), beforeCount)
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeQuantity)
+})
+
 test('sale returns use source invoice prices, reject duplicate-line overreturns, and are idempotent', async () => {
   await assert.rejects(
     localAtomicAction(db, 'commit_sale_return', {
