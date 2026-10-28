@@ -72,7 +72,7 @@ export function StoreSettingsSection() {
   }
 
   function update(key: keyof StoreSettings, value: string | boolean) {
-    setForm({ ...form, [key]: value })
+    setForm({ ...form, [key]: String(value) })
   }
 
   if (isLoading || !form) {
