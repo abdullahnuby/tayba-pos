@@ -60,7 +60,9 @@ test('safe schema setup snapshots an existing database and preserves rows throug
     assert.ok(createdBackups.length > 0, 'second setup must create a pre-upgrade SQLite snapshot')
 
     const liveDb = new PrismaClient({ datasources: { db: { url: `file:${databasePath}` } } })
-    const snapshotPath = resolve(backupDirectory, createdBackups.sort().at(-1)!)
+    const snapshotName = createdBackups.sort().at(-1)
+    assert.ok(snapshotName, 'pre-upgrade backup filename must exist')
+    const snapshotPath = resolve(backupDirectory, snapshotName)
     const snapshotDb = new PrismaClient({ datasources: { db: { url: `file:${snapshotPath}` } } })
     try {
       const liveRow = await liveDb.setting.findUnique({ where: { key: 'ci-safe-upgrade-preserve-row' } })
