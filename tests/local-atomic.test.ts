@@ -229,6 +229,7 @@ test('resuming a draft reserves stock and applies only the remaining customer de
 })
 
 test('purchase aggregates repeated variant lines and deduplicates repeated submissions', async () => {
+  const beforePurchaseVariant = await db.productVariant.findUniqueOrThrow({ where: { id: variantId }, select: { quantity: true, costPrice: true } })
   const payload = {
     idempotencyKey: 'ci-purchase-repeat-key',
     supplierId,
@@ -247,8 +248,10 @@ test('purchase aggregates repeated variant lines and deduplicates repeated submi
   purchaseId = purchase.id
   purchaseItemId = purchase.items[0].id
   assert.equal(purchase.items.length, 2)
-  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, 15)
-  assert.ok(Math.abs((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).costPrice - (91 / 15)) < 0.0001)
+  const afterPurchaseVariant = await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })
+  assert.equal(afterPurchaseVariant.quantity, beforePurchaseVariant.quantity + 5)
+  const expectedWeightedCost = (beforePurchaseVariant.quantity * beforePurchaseVariant.costPrice + 2 * 7 + 3 * 9) / (beforePurchaseVariant.quantity + 5)
+  assert.ok(Math.abs(afterPurchaseVariant.costPrice - expectedWeightedCost) < 0.0001)
 })
 
 test('purchase returns are linked to source lines and cannot exceed purchased quantity', async () => {
@@ -346,6 +349,7 @@ test('voiding a paid sale is blocked so refunds cannot disappear from cash accou
 })
 
 test('voiding an unpaid credit sale restores stock and removes recorded customer debt', async () => {
+  const beforeVoidBalance = (await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance
   const sale = await localAtomicAction<any>(db, 'commit_sale', {
     payload: {
       customerId,
@@ -358,13 +362,12 @@ test('voiding an unpaid credit sale restores stock and removes recorded customer
     },
   })
   const beforeVoidQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
-  const beforeVoidBalance = (await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance
-  assert.equal(beforeVoidBalance, 10)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, beforeVoidBalance + 10)
 
   const voided = await localAtomicAction<any>(db, 'void_sale', { payload: { saleId: sale.id, voidReason: 'CI credit reversal' } })
   assert.equal(voided.status, 'voided')
   assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeVoidQuantity + 1)
-  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, beforeVoidBalance)
 })
 
 test('SQLite backup snapshot passes integrity check and can be opened independently', async () => {
