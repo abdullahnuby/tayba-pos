@@ -45,7 +45,7 @@ async function summarizeShift(session: { userId: string; openedAt: Date; opening
     }),
     db.saleReturn.findMany({
       where: { createdAt: range, status: 'completed', refundMethod: 'cash', userId: session.userId },
-      select: { total: true },
+      select: { total: true, refundAmount: true },
     }),
     db.purchaseReturn.findMany({
       where: { createdAt: range, status: 'completed', refundMethod: 'cash', userId: session.userId },
@@ -69,8 +69,8 @@ async function summarizeShift(session: { userId: string; openedAt: Date; opening
   const unclassifiedPurchasePayments = purchases.filter((purchase) => !purchase.paymentMethod).reduce((sum, purchase) => sum + initialPurchasePayment(purchase), 0)
   const customerCash = customerCashAgg._sum.amount || 0
   const supplierCashPayments = supplierCashAgg._sum.amount || 0
-  const cashRefunds = saleRefunds.reduce((sum, returned) => sum + returned.total, 0)
-  const supplierCashRefunds = purchaseRefunds.reduce((sum, returned) => sum + returned.refundAmount, 0)
+  const cashRefunds = saleRefunds.reduce((sum, returned) => sum + (returned.refundAmount ?? returned.total), 0)
+  const supplierCashRefunds = purchaseRefunds.reduce((sum, returned) => sum + (returned.refundAmount ?? returned.total), 0)
   const expectedCash = session.openingFloat + cashSales + customerCash + supplierCashRefunds - cashRefunds - cashPurchases - supplierCashPayments
 
   return {
