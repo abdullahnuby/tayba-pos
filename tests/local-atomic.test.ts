@@ -427,6 +427,27 @@ test('VAT-inclusive settings keep the entered total inclusive of VAT', async () 
   assert.ok(Math.abs(sale.taxAmount - (100 - 100 / 1.14)) < 0.0001)
 })
 
+test('VAT-inclusive purchase invoices keep the entered total inclusive of VAT', async () => {
+  await db.setting.upsert({ where: { key: 'vatEnabled' }, update: { value: 'true' }, create: { key: 'vatEnabled', value: 'true' } })
+  await db.setting.upsert({ where: { key: 'vatRate' }, update: { value: '14' }, create: { key: 'vatRate', value: '14' } })
+  await db.setting.upsert({ where: { key: 'vatInclusive' }, update: { value: 'true' }, create: { key: 'vatInclusive', value: 'true' } })
+
+  const purchase = await localAtomicAction<any>(db, 'commit_purchase', {
+    payload: {
+      idempotencyKey: 'ci-vat-inclusive-purchase',
+      supplierId,
+      items: [{ variantId, quantity: 1, unitCost: 100, enteredQuantity: 1, unit: 'piece', unitFactor: 1 }],
+      discount: 0,
+      paid: 100,
+      paymentMethod: 'cash',
+      status: 'completed',
+    },
+  })
+  assert.equal(purchase.total, 100)
+  assert.ok(Math.abs(purchase.taxAmount - (100 - 100 / 1.14)) < 0.0001)
+  assert.equal(purchase.initialPaid, 100)
+})
+
 test('voiding a paid sale is blocked so refunds cannot disappear from cash accounting', async () => {
   const sale = await localAtomicAction<any>(db, 'commit_sale', {
     payload: {
