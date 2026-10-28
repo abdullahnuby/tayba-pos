@@ -262,6 +262,48 @@ test('VAT-inclusive settings keep the entered total inclusive of VAT', async () 
   assert.ok(Math.abs(sale.taxAmount - (100 - 100 / 1.14)) < 0.0001)
 })
 
+test('voiding a paid sale is blocked so refunds cannot disappear from cash accounting', async () => {
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 10,
+      paymentMethod: 'cash',
+      status: 'completed',
+      idempotencyKey: 'ci-paid-void-sale',
+    },
+  })
+  const quantityBeforeVoid = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  await assert.rejects(
+    localAtomicAction(db, 'void_sale', { payload: { saleId: sale.id, voidReason: 'CI test' } }),
+    /تم تحصيل مبلغ منها/,
+  )
+  assert.equal((await db.sale.findUniqueOrThrow({ where: { id: sale.id } })).status, 'completed')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, quantityBeforeVoid)
+})
+
+test('voiding an unpaid credit sale restores stock and removes recorded customer debt', async () => {
+  const sale = await localAtomicAction<any>(db, 'commit_sale', {
+    payload: {
+      customerId,
+      items: [{ variantId, quantity: 1, unitPrice: 10 }],
+      discount: 0,
+      paid: 0,
+      paymentMethod: 'credit',
+      status: 'completed',
+      idempotencyKey: 'ci-unpaid-void-sale',
+    },
+  })
+  const beforeVoidQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
+  const beforeVoidBalance = (await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance
+  assert.equal(beforeVoidBalance, 10)
+
+  const voided = await localAtomicAction<any>(db, 'void_sale', { payload: { saleId: sale.id, voidReason: 'CI credit reversal' } })
+  assert.equal(voided.status, 'voided')
+  assert.equal((await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity, beforeVoidQuantity + 1)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
+})
+
 test('bulk stock adjustment is all-or-nothing if one variant is invalid', async () => {
   const beforeQuantity = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
   const beforeCount = await db.stockAdjustment.count()
