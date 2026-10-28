@@ -399,7 +399,7 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
     if (!liveUser?.active) return null
 
     const changeFlag = await db.setting.findUnique({ where: { key: `mustChangePw:${liveUser.id}` } })
-    const role = ['admin', 'manager', 'cashier'].includes(liveUser.role) ? liveUser.role : null
+    const role: SessionUser['role'] | null = ['admin', 'manager', 'cashier'].includes(liveUser.role) ? liveUser.role as SessionUser['role'] : null
     if (!role) return null
 
     return {
