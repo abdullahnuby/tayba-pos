@@ -137,16 +137,6 @@ export async function POST(req: NextRequest) {
 
     await auditLog({ user, action: 'create', entity: 'purchase', entityId: purchase.id, after: { invoiceNo: purchase.invoiceNo, total: purchase.total } })
 
-    // Auto-sync to Google Sheets (best-effort, only if completed)
-    if (data.status === 'completed') {
-      try {
-        const { syncAfterPurchase } = await import('@/lib/sync')
-        await syncAfterPurchase(data.supplierId)
-      } catch (syncErr) {
-        console.error('Auto-sync failed (purchase):', syncErr)
-      }
-    }
-
     return NextResponse.json(purchase, { status: 201 })
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string }
