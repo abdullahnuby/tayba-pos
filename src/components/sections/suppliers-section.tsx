@@ -1,7 +1,8 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { clearIdempotencyKey, withIdempotencyKey } from '@/lib/client-idempotency'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +41,7 @@ const empty = { name: '', phone: '', address: '', notes: '' }
 
 export function SuppliersSection() {
   const qc = useQueryClient()
+  const paymentKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [form, setForm] = useState(empty)
@@ -103,7 +105,7 @@ export function SuppliersSection() {
       const res = await fetch('/api/supplier-payments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(withIdempotencyKey(data, paymentKeyRef)),
       })
       if (!res.ok) {
         const e = await res.json()
@@ -111,6 +113,7 @@ export function SuppliersSection() {
       }
     },
     onSuccess: () => {
+      clearIdempotencyKey(paymentKeyRef)
       qc.invalidateQueries({ queryKey: ['suppliers'] })
       qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
       toast.success('تم تسجيل الدفعة وتحديث رصيد المورد')
