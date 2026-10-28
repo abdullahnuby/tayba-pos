@@ -8,7 +8,7 @@ import { localAtomicAction } from './local-atomic'
  * a SQLite file on this computer; network database URLs are deliberately
  * rejected so the shop cannot silently write business data to a remote host.
  */
-function localDatabaseUrl(): string {
+export function getLocalDatabasePath(): string {
   const url = (process.env.DATABASE_URL || 'file:../data/tayba.db').trim()
   if (!url.startsWith('file:')) {
     throw new Error('Tayba POS يعمل محليًا فقط؛ DATABASE_URL يجب أن يشير إلى ملف SQLite محلي')
@@ -20,7 +20,12 @@ function localDatabaseUrl(): string {
     ? relativePath
     : resolve(process.cwd(), 'prisma', relativePath)
   mkdirSync(dirname(filePath), { recursive: true })
-  return url
+  return filePath
+}
+
+function localDatabaseUrl(): string {
+  getLocalDatabasePath()
+  return (process.env.DATABASE_URL || 'file:../data/tayba.db').trim()
 }
 
 function createPrismaClient(): PrismaClient {
