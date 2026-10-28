@@ -1,7 +1,8 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
+import { clearIdempotencyKey, withIdempotencyKey } from '@/lib/client-idempotency'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -32,6 +33,7 @@ type RefundMethod = 'cash' | 'card' | 'credit'
 
 export function ReturnsSection() {
   const qc = useQueryClient()
+  const submissionKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const [search, setSearch] = useState('')
   const [viewing, setViewing] = useState<SaleReturn | null>(null)
   const [newDialogOpen, setNewDialogOpen] = useState(false)
@@ -54,11 +56,12 @@ export function ReturnsSection() {
 
   const createReturn = useMutation({
     mutationFn: async (data: Record<string, unknown>) => {
-      const res = await fetch('/api/sale-returns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) })
+      const res = await fetch('/api/sale-returns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(withIdempotencyKey(data, submissionKeyRef)) })
       if (!res.ok) { const e = await res.json(); throw new Error(e.error || 'خطأ') }
       return res.json()
     },
     onSuccess: () => {
+      clearIdempotencyKey(submissionKeyRef)
       qc.invalidateQueries({ queryKey: ['sale-returns'] }); qc.invalidateQueries({ queryKey: ['sales'] }); qc.invalidateQueries({ queryKey: ['dashboard-stats'] }); qc.invalidateQueries({ queryKey: ['sales-for-returns'] })
       toast.success('تم تسجيل المرتجع وإرجاع الكميات للمخزون')
       closeNewReturn()
@@ -95,7 +98,8 @@ export function ReturnsSection() {
   const returnTotal = returnItems.reduce((sum, item) => sum + item.quantity * item.unitPrice, 0)
   const hasItems = returnItems.some((item) => item.quantity > 0)
 
-  function closeNewReturn() { setNewDialogOpen(false); setSelectedSale(null); setReturnItems([]); setReason(''); setRefundMethod('cash') }
+  function closeNewReturn() {
+    clearIdempotencyKey(submissionKeyRef) setNewDialogOpen(false); setSelectedSale(null); setReturnItems([]); setReason(''); setRefundMethod('cash') }
   function submitReturn() {
     const valid = returnItems.filter((i) => i.quantity > 0)
     if (!selectedSale || valid.length === 0) return toast.error('حدد صنفًا واحدًا على الأقل')
