@@ -5,7 +5,7 @@ import { getCurrentUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 
 const item = z.object({ saleItemId: z.string().min(1), variantId: z.string().min(1), quantity: z.number().int().positive(), unitPrice: z.number().min(0) })
-const schema = z.object({ saleId: z.string().min(1), reason: z.string().optional().nullable(), notes: z.string().optional().nullable(), refundMethod: z.enum(['cash','card','credit']).default('cash'), items: z.array(item).min(1) })
+const schema = z.object({ saleId: z.string().min(1), idempotencyKey: z.string().min(8).max(200).optional(), reason: z.string().optional().nullable(), notes: z.string().optional().nullable(), refundMethod: z.enum(['cash','card','credit']).default('cash'), items: z.array(item).min(1) })
 
 export async function GET() {
   const user = await getCurrentUser()
@@ -20,9 +20,15 @@ export async function POST(req: NextRequest) {
     const user = await getCurrentUser()
     if (!user || !['admin','manager'].includes(user.role)) return NextResponse.json({ error: 'لا تملك صلاحية المرتجعات' }, { status: 403 })
     const data = schema.parse(await req.json())
-    const result = await atomicAction('commit_sale_return', { payload: { saleId: data.saleId, reason: data.reason || null, notes: data.notes || null, refundMethod: data.refundMethod, items: data.items } })
+    const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
+    const result = await atomicAction('commit_sale_return', { payload: { saleId: data.saleId, idempotencyKey, reason: data.reason || null, notes: data.notes || null, refundMethod: data.refundMethod, items: data.items } })
     await auditLog({ user, action: 'return', entity: 'sale', entityId: data.saleId, after: { returnNo: (result as any).returnNo, total: (result as any).total, refundMethod: data.refundMethod } })
     try { const { syncAfterReturn } = await import('@/lib/sync'); await syncAfterReturn((result as any).customerId || null) } catch {}
     return NextResponse.json(result, { status: 201 })
-  } catch (e: unknown) { return NextResponse.json({ error: e instanceof Error ? e.message : 'خطأ في تسجيل المرتجع' }, { status: 500 }) }
+  } catch (e: unknown) {
+    const message = e instanceof Error ? e.message : 'خطأ في تسجيل المرتجع'
+    const clientError = /غير موجود|غير صحيح|تجاوز|المخزون|مرتجع|إرجاع|إرجاع|كمية|فاتورة|إتمام|لا يمكن/i.test(message)
+    return NextResponse.json({ error: message }, { status: clientError ? 400 : 500 })
+  }
 }
