@@ -546,6 +546,14 @@ export async function localAtomicAction<T = any>(
         if (numeric(sale.paid) > 0.001) {
           throw new Error('لا يمكن إلغاء فاتورة تم تحصيل مبلغ منها؛ سجّل مرتجعًا بطريقة الاسترداد الصحيحة')
         }
+        if (sale.customerId) {
+          const unallocatedCollections = await tx.customerPayment.count({
+            where: { customerId: sale.customerId, saleId: null },
+          })
+          if (unallocatedCollections > 0) {
+            throw new Error('لا يمكن إلغاء الفاتورة لوجود تحصيلات للعميل غير موزعة على فواتير؛ راجع كشف الحساب أولًا')
+          }
+        }
         for (const item of sale.items) await updateStock(tx, item.variantId, item.quantity)
         const due = Math.max(0, numeric(sale.total) - numeric(sale.paid))
         if (sale.customerId && due > 0) {
@@ -691,6 +699,12 @@ export async function localAtomicAction<T = any>(
         if (purchase.status !== 'completed') throw new Error('يمكن إلغاء فواتير الشراء المكتملة فقط')
         if (purchase.returns.length || purchase.supplierPayments.length || numeric(purchase.paid) > 0) {
           throw new Error('لا يمكن إلغاء فاتورة شراء عليها مرتجع أو دفعات؛ استخدم مرتجع الشراء وتسوية المورد')
+        }
+        const unallocatedPayments = await tx.supplierPayment.count({
+          where: { supplierId: purchase.supplierId, purchaseId: null },
+        })
+        if (unallocatedPayments > 0) {
+          throw new Error('لا يمكن إلغاء فاتورة الشراء لوجود دفعات للمورد غير موزعة على فواتير؛ استخدم مرتجع الشراء وراجع كشف المورد')
         }
         const totals = new Map<string, number>()
         for (const item of purchase.items) totals.set(item.variantId, (totals.get(item.variantId) || 0) + item.quantity)
