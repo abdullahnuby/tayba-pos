@@ -55,7 +55,7 @@ const NAV_ITEMS: NavItem[] = [
   { key: 'suppliers', label: 'الموردون', icon: Users, roles: ['admin', 'manager'], group: 'people' },
   { key: 'customers', label: 'العملاء', icon: User, roles: ['admin', 'manager'], group: 'people' },
   { key: 'reports', label: 'التقارير', icon: BarChart3, roles: ['admin', 'manager'], group: 'management' },
-  { key: 'sync', label: 'المزامنة', icon: RefreshCw, roles: ['admin', 'manager'], group: 'management' },
+  { key: 'sync', label: 'النسخ الاحتياطي', icon: RefreshCw, roles: ['admin', 'manager'], group: 'management' },
   { key: 'audit', label: 'سجل العمليات', icon: FileClock, roles: ['admin'], group: 'management' },
   { key: 'users', label: 'المستخدمون', icon: Users, roles: ['admin'], group: 'management' },
   { key: 'settings', label: 'الإعدادات', icon: Settings, roles: ['admin'], group: 'management' },
