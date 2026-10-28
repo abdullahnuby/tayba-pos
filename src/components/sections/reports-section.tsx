@@ -10,7 +10,7 @@ import { BarChart3, RefreshCw } from 'lucide-react'
 import { formatEGP, todayISO, daysAgoISO } from '@/lib/format'
 import { toast } from 'sonner'
 
-interface Report { from:string;to:string;salesCount:number;purchasesCount:number;returnsCount:number;purchaseReturnsCount:number;totalSales:number;netSales:number;totalReturns:number;totalPurchases:number;netPurchases:number;recognizedSales:number;recognizedReturns:number;recognizedNetSales:number;totalProfit:number;cogs:number;profitMargin:number;bestSelling:Array<{id:string;name:string;qty:number;revenue:number;profit:number}>;salesByMethod:Array<{name:string;value:number}> }
+interface Report { from:string;to:string;salesCount:number;purchasesCount:number;returnsCount:number;purchaseReturnsCount:number;totalSales:number;netSales:number;totalReturns:number;totalPurchases:number;totalPurchaseReturns:number;netPurchases:number;recognizedSales:number;recognizedReturns:number;recognizedNetSales:number;totalProfit:number;cogs:number;profitMargin:number;bestSelling:Array<{id:string;name:string;qty:number;revenue:number;profit:number}>;salesByMethod:Array<{name:string;value:number}> }
 
 export function ReportsSection(){
   const [from,setFrom]=useState(daysAgoISO(30)); const [to,setTo]=useState(todayISO()); const [applied,setApplied]=useState({from:daysAgoISO(30),to:todayISO()})
