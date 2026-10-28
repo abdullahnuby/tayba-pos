@@ -98,9 +98,10 @@ export async function POST(req: NextRequest) {
       const baseQuantity = Math.round(enteredQuantity * factor)
       const enteredUnitCost = Number(i.unitCost)
       const baseUnitCost = enteredUnitCost / factor
-      return { ...i, quantity: baseQuantity, unitCost: baseUnitCost, enteredQuantity, unit: i.unit || v.purchaseUnit || 'piece', unitFactor: factor, lineTotal: enteredQuantity * enteredUnitCost }
+      const lineTotal = Math.round((enteredQuantity * enteredUnitCost + Number.EPSILON) * 100) / 100
+      return { ...i, quantity: baseQuantity, unitCost: baseUnitCost, enteredQuantity, unit: i.unit || v.purchaseUnit || 'piece', unitFactor: factor, lineTotal }
     })
-    const subtotal = normalizedItems.reduce((s, i) => s + i.lineTotal, 0)
+    const subtotal = Math.round((normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0) + Number.EPSILON) * 100) / 100
     if (data.discount > subtotal) {
       return NextResponse.json(
         { error: `الخصم (${data.discount}) يتجاوز الإجمالي الفرعي (${subtotal})` },
