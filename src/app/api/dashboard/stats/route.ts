@@ -9,6 +9,9 @@ const dayKey = (date: Date) => date.toISOString().slice(0, 10)
 export async function GET() {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (!['admin', 'manager'].includes(user.role)) {
+    return NextResponse.json({ error: 'لوحة التحكم متاحة للإدارة فقط' }, { status: 403 })
+  }
 
   const now = new Date()
   const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate())
