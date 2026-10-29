@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { importLegacyDatabase, resolveReturnItemLinks, reconcileStockLedger } from '../scripts/import-legacy-sqlite.mjs'
+import { importLegacyDatabase, resolveReturnItemLinks } from '../scripts/import-legacy-sqlite.mjs'
 
 function makeLegacyFixture(path) {
   const db = new DatabaseSync(path)
