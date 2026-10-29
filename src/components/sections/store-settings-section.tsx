@@ -40,6 +40,38 @@ export function StoreSettingsSection() {
 
   const [form, setForm] = useState<Partial<StoreSettings>>({})
 
+  const [adminPassword, setAdminPassword] = useState('')
+  const [managerPin, setManagerPin] = useState('')
+  const managerPinStatus = useQuery<{ configured: boolean }>({
+    queryKey: ['manager-pin-status'],
+    queryFn: async () => {
+      const response = await fetch('/api/auth/manager-pin', { cache: 'no-store' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'تعذر قراءة حالة PIN المدير')
+      return result
+    },
+  })
+  const managerPinMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/auth/manager-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ currentPassword: adminPassword, pin: managerPin }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'تعذر حفظ PIN المدير')
+      return result
+    },
+    onSuccess: () => {
+      setAdminPassword('')
+      setManagerPin('')
+      qc.invalidateQueries({ queryKey: ['manager-pin-status'] })
+      toast.success('تم تحديث PIN موافقة المدير بأمان')
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'تعذر حفظ PIN المدير'),
+  })
+
   // Sync form with loaded settings
   if (data && Object.keys(form).length === 0) {
     setForm(data)
@@ -182,6 +214,43 @@ export function StoreSettingsSection() {
             <Label htmlFor="lr">معدل النقاط (لكل ج.م)</Label>
             <Input id="lr" type="number" step="0.001" value={form.loyaltyRate || '0.01'} onChange={(e) => update('loyaltyRate', e.target.value)} dir="ltr" />
             <p className="text-xs text-muted-foreground">0.01 = نقطة لكل 100 ج.م</p>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">تأمين موافقة المدير على الخصومات</CardTitle>
+          <CardDescription>
+            PIN منفصل عن PIN فتح الوردية. لا يُعرض أو يُخزّن كنص واضح، وتغييرُه يتطلب كلمة مرور المدير الحالية.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border p-3 text-sm">
+            {managerPinStatus.isLoading
+              ? 'جاري فحص إعداد PIN المدير...'
+              : managerPinStatus.data?.configured
+                ? 'تم إعداد PIN موافقة المدير.'
+                : 'لم يتم إعداد PIN موافقة المدير بعد. لن تعمل موافقات الأسعار الخاصة حتى إعداده.'}
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="admin-current-password">كلمة مرور المدير الحالية</Label>
+              <Input id="admin-current-password" type="password" autoComplete="current-password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="manager-approval-pin">PIN الموافقة الجديد (4 إلى 6 أرقام)</Label>
+              <Input id="manager-approval-pin" type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4,6}" maxLength={6} value={managerPin} onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, '').slice(0, 6))} />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={() => managerPinMutation.mutate()}
+              disabled={managerPinMutation.isPending || !adminPassword || !/^[0-9]{4,6}$/.test(managerPin)}
+            >
+              {managerPinMutation.isPending ? 'جاري التأمين...' : managerPinStatus.data?.configured ? 'تغيير PIN المدير' : 'تعيين PIN المدير'}
+            </Button>
           </div>
         </CardContent>
       </Card>
