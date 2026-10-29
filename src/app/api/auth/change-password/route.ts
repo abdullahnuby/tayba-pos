@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser, verifyPassword, verifyPin, hashPassword, validatePasswordPolicy, clearMustChangePassword } from '@/lib/auth'
+import { getCurrentUser, verifyPassword, verifyPin, hashPassword, validatePasswordPolicy, clearMustChangePassword, rotateSessionEpoch, createSessionToken, getSessionEpoch, SESSION_COOKIE_NAME, SESSION_MAX_AGE, type SessionUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { z } from 'zod'
@@ -43,15 +43,35 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'كلمة المرور الجديدة يجب أن تكون مختلفة' }, { status: 400 })
     }
 
-    await db.user.update({
+    const updatedUser = await db.user.update({
       where: { id: user.id },
       data: { passwordHash: hashPassword(newPassword) },
+      select: { id: true, username: true, name: true, role: true },
     })
     await clearMustChangePassword(user.id)
+    await rotateSessionEpoch(user.id)
+
+    const refreshedUser: SessionUser = {
+      id: updatedUser.id,
+      username: updatedUser.username,
+      name: updatedUser.name,
+      role: updatedUser.role as SessionUser['role'],
+    }
+    const refreshedToken = createSessionToken(refreshedUser, await getSessionEpoch(user.id))
 
     await auditLog({ user, action: 'password_change', entity: 'user', entityId: user.id })
 
-    return NextResponse.json({ ok: true, message: 'تم تغيير كلمة المرور بنجاح' })
+    const response = NextResponse.json({ ok: true, message: 'تم تغيير كلمة المرور بنجاح' })
+    const hostname = new URL(req.url).hostname.toLowerCase()
+    const localHttp = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+    response.cookies.set(SESSION_COOKIE_NAME, refreshedToken, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !localHttp,
+      maxAge: SESSION_MAX_AGE,
+      path: '/',
+    })
+    return response
   } catch (e: unknown) {
     const err = e as { message?: string }
     return NextResponse.json({ error: err.message || 'خطأ' }, { status: 500 })
