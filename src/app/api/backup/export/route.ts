@@ -36,7 +36,7 @@ export async function GET(req: NextRequest) {
     db.stockAdjustment.findMany({ include: { variant: { include: { product: true } }, user: { select: { name: true } } } }),
     db.registerSession.findMany({ include: { user: { select: { name: true } } } }),
     db.auditLog.findMany({ include: { user: { select: { name: true } } }, take: 500 }),
-    db.setting.findMany({ where: { key: { notIn: ['managerPin', 'googleClientEmail', 'googlePrivateKey', 'googleSpreadsheetId', 'googleLiveCsvUrl', 'appsScriptUrl', 'appsScriptToken'] } } }),
+    db.setting.findMany({ where: { key: { notIn: ['managerPin', 'googleClientEmail', 'googlePrivateKey', 'googleSpreadsheetId', 'googleLiveCsvUrl', 'appsScriptUrl', 'appsScriptToken'] }, NOT: { key: { startsWith: 'mustChangePw:' } } } }),
   ])
 
   if (format === 'csv') {
