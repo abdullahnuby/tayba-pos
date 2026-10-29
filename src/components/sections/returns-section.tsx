@@ -43,12 +43,12 @@ export function ReturnsSection() {
   const [reason, setReason] = useState('')
   const [refundMethod, setRefundMethod] = useState<RefundMethod>('cash')
 
-  const { data: returnsData, isLoading } = useQuery<{ items: SaleReturn[] }>({
-    queryKey: ['sale-returns'], queryFn: async () => (await fetch('/api/sale-returns')).json(),
+  const { data: returnsData, isLoading, isError: returnsError, refetch: refetchReturns } = useQuery<{ items: SaleReturn[] }>({
+    queryKey: ['sale-returns'], queryFn: async () => { const response = await fetch('/api/sale-returns'); if (!response.ok) throw new Error('تعذر تحميل المرتجعات'); return response.json() },
   })
   const returns = returnsData?.items || []
-  const { data: salesData } = useQuery<{ items: Sale[] }>({
-    queryKey: ['sales-for-returns'], queryFn: async () => (await fetch('/api/sales?status=completed&pageSize=100')).json(),
+  const { data: salesData, isError: salesError, refetch: refetchSales } = useQuery<{ items: Sale[] }>({
+    queryKey: ['sales-for-returns'], queryFn: async () => { const response = await fetch('/api/sales?status=completed&pageSize=100'); if (!response.ok) throw new Error('تعذر تحميل فواتير البيع'); return response.json() },
   })
   const sales = salesData?.items || []
   const filteredReturns = returns.filter((r) => !search || r.returnNo.includes(search) || r.sale?.invoiceNo.includes(search) || r.customer?.name?.includes(search))
@@ -118,7 +118,7 @@ export function ReturnsSection() {
       <Card>
         <CardHeader><CardTitle className="text-base">المرتجعات ({filteredReturns.length})</CardTitle></CardHeader>
         <CardContent className="p-3 sm:p-6">
-          {isLoading ? <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div> : filteredReturns.length === 0 ? <EmptyState title="لا توجد مرتجعات" description="ابدأ من زر مرتجع جديد واختر الفاتورة" icon={RotateCcw} /> : (
+          {isLoading ? <div className="space-y-2">{Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-14 w-full" />)}</div> : returnsError ? <div className="flex flex-col items-center gap-3 py-10 text-center"><p className="text-sm text-destructive">تعذر تحميل سجل المرتجعات.</p><Button variant="outline" onClick={() => void refetchReturns()}>إعادة المحاولة</Button></div> : filteredReturns.length === 0 ? <EmptyState title="لا توجد مرتجعات" description="ابدأ من زر مرتجع جديد واختر الفاتورة" icon={RotateCcw} /> : (
             <>
               <div className="space-y-2 md:hidden">{filteredReturns.map((r) => <button key={r.id} className="w-full rounded-xl border p-3 text-right active:bg-accent" onClick={() => setViewing(r)}>
                 <div className="flex items-start justify-between gap-3"><div><div className="font-mono text-sm font-semibold">{r.returnNo}</div><div className="mt-1 text-xs text-muted-foreground">فاتورة {r.sale?.invoiceNo || '—'} · {r.customer?.name || 'عميل نقدي'}</div></div><Badge>{formatEGP(r.total)} ج.م</Badge></div>
@@ -135,7 +135,7 @@ export function ReturnsSection() {
           <DialogHeader className="shrink-0 border-b px-4 py-4 text-right sm:px-6"><DialogTitle>مرتجع بيع جديد</DialogTitle><DialogDescription>ابحث عن الفاتورة ثم حدد الأصناف والكميات المتاحة للإرجاع.</DialogDescription></DialogHeader>
           {!selectedSale ? <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-6">
             <div className="mb-3 rounded-lg bg-muted/40 p-3 text-xs text-muted-foreground">يمكنك البحث برقم الفاتورة أو اسم العميل. يتم تحميل تفاصيل الفاتورة قبل اختيار الكميات لضمان عرض المتبقي الحقيقي.</div>
-            {filteredSales.length === 0 ? <EmptyState title="لا توجد فواتير" description="جرّب تغيير البحث" icon={Search} /> : <div className="space-y-2">{filteredSales.map((s) => <button key={s.id} disabled={loadingSale} onClick={() => openNewReturn(s)} className="flex min-h-16 w-full items-center justify-between gap-3 rounded-xl border p-3 text-right transition active:scale-[.99] disabled:opacity-50 hover:bg-accent"><div className="min-w-0"><div className="font-mono text-sm font-semibold">{s.invoiceNo}</div><div className="mt-1 truncate text-xs text-muted-foreground">{s.customer?.name || 'عميل نقدي'} · {formatDateTime(s.date)}</div></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold text-sm">{formatEGP(s.total)} ج.م</span><ArrowRight className="size-4" /></div></button>)}</div>}
+            {salesError ? <div className="flex flex-col items-center gap-3 rounded-xl border border-destructive/30 p-6 text-center"><p className="text-sm text-destructive">تعذر تحميل فواتير البيع لاختيار المرتجع.</p><Button variant="outline" onClick={() => void refetchSales()}>إعادة المحاولة</Button></div> : filteredSales.length === 0 ? <EmptyState title="لا توجد فواتير" description="جرّب تغيير البحث" icon={Search} /> : <div className="space-y-2">{filteredSales.map((s) => <button key={s.id} disabled={loadingSale} onClick={() => openNewReturn(s)} className="flex min-h-16 w-full items-center justify-between gap-3 rounded-xl border p-3 text-right transition active:scale-[.99] disabled:opacity-50 hover:bg-accent"><div className="min-w-0"><div className="font-mono text-sm font-semibold">{s.invoiceNo}</div><div className="mt-1 truncate text-xs text-muted-foreground">{s.customer?.name || 'عميل نقدي'} · {formatDateTime(s.date)}</div></div><div className="flex shrink-0 items-center gap-2"><span className="font-semibold text-sm">{formatEGP(s.total)} ج.م</span><ArrowRight className="size-4" /></div></button>)}</div>}
           </div> : <>
             <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-6">
               <button className="mb-3 flex min-h-11 items-center gap-2 text-sm font-medium text-muted-foreground" onClick={() => setSelectedSale(null)}><ArrowRight className="size-4" /> اختيار فاتورة أخرى</button>
