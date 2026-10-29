@@ -228,10 +228,12 @@ export function validatePasswordPolicy(
 // -----------------------------------------------------
 
 export function createSessionToken(
-  user: SessionUser
+  user: SessionUser,
+  sessionEpoch = '0',
 ): string {
   const payload = {
     ...user,
+    sessionEpoch,
     exp:
       Date.now() +
       SESSION_TTL_HOURS *
@@ -266,7 +268,7 @@ export function verifySessionToken(
     | string
     | undefined
     | null
-): SessionUser | null {
+): (SessionUser & { sessionEpoch: string }) | null {
   if (!token) {
     return null
   }
@@ -310,7 +312,9 @@ export function verifySessionToken(
       !payload?.id ||
       !payload?.username ||
       !payload?.name ||
-      !payload?.role
+      !payload?.role ||
+      typeof payload?.sessionEpoch !== 'string' ||
+      !payload.sessionEpoch
     ) {
       return null
     }
@@ -349,6 +353,7 @@ export function verifySessionToken(
         Boolean(
           payload.mustChangePassword
         ),
+      sessionEpoch: payload.sessionEpoch,
     }
   } catch {
     return null
@@ -382,6 +387,9 @@ export async function getCurrentUser(options: { allowMustChangePassword?: boolea
       select: { id: true, username: true, name: true, role: true, active: true },
     })
     if (!liveUser?.active) return null
+
+    const sessionEpoch = await db.setting.findUnique({ where: { key: `sessionEpoch:${liveUser.id}` } })
+    if (decoded.sessionEpoch !== (sessionEpoch?.value || '0')) return null
 
     const changeFlag = await db.setting.findUnique({ where: { key: `mustChangePw:${liveUser.id}` } })
     const mustChangePassword = changeFlag?.value === '1'
@@ -546,6 +554,21 @@ export async function flagMustChangePassword(
       value: '1',
     },
   })
+}
+
+export async function getSessionEpoch(userId: string): Promise<string> {
+  const row = await db.setting.findUnique({ where: { key: `sessionEpoch:${userId}` }, select: { value: true } })
+  return row?.value || '0'
+}
+
+export async function rotateSessionEpoch(userId: string): Promise<string> {
+  const value = crypto.randomUUID()
+  await db.setting.upsert({
+    where: { key: `sessionEpoch:${userId}` },
+    create: { key: `sessionEpoch:${userId}`, value },
+    update: { value },
+  })
+  return value
 }
 
 export async function clearMustChangePassword(
