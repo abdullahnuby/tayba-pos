@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser, verifyPassword, hashPassword, validatePasswordPolicy, clearMustChangePassword } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { z } from 'zod'
 
 const schema = z.object({
@@ -11,6 +12,9 @@ const schema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
+    const limited = applyRateLimit(req, 'password-change', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
+    if (limited) return limited
+
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
 
