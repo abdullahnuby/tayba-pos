@@ -316,6 +316,89 @@ function activeModelRows(data, linkPlan) {
   }
 }
 
+/**
+ * Reconcile the active stock ledger against the current on-hand quantities.
+ * We deliberately do not rewrite historical movements: a clearly labeled
+ * adjustment dated at import time makes the ledger balance without claiming
+ * to know when the historical drift occurred.
+ */
+export function reconcileStockLedger(data, models, importedAt = new Date().toISOString()) {
+  const expected = new Map(models.ProductVariant.map((variant) => [variant.id, 0]))
+  const variants = new Map(models.ProductVariant.map((variant) => [variant.id, variant]))
+  const add = (variantId, delta) => {
+    if (!expected.has(variantId)) return
+    expected.set(variantId, (expected.get(variantId) || 0) + number(delta))
+  }
+
+  for (const row of models.StockAdjustment) add(row.variantId, row.quantityChange)
+
+  const completedPurchases = new Set(models.Purchase.filter((row) => row.status === 'completed').map((row) => row.id))
+  for (const row of models.PurchaseItem) {
+    if (completedPurchases.has(row.purchaseId)) add(row.variantId, row.quantity)
+  }
+
+  const activeSaleStatuses = new Set(['completed', 'partial_return', 'returned'])
+  const activeSales = new Set(models.Sale.filter((row) => activeSaleStatuses.has(row.status)).map((row) => row.id))
+  for (const row of models.SaleItem) {
+    if (activeSales.has(row.saleId)) add(row.variantId, -number(row.quantity))
+  }
+
+  const completedSaleReturns = new Set(models.SaleReturn.filter((row) => row.status === 'completed').map((row) => row.id))
+  for (const row of models.SaleReturnItem) {
+    if (completedSaleReturns.has(row.saleReturnId)) add(row.variantId, row.quantity)
+  }
+
+  const completedPurchaseReturns = new Set(models.PurchaseReturn.filter((row) => row.status === 'completed').map((row) => row.id))
+  for (const row of models.PurchaseReturnItem) {
+    if (completedPurchaseReturns.has(row.purchaseReturnId)) add(row.variantId, -number(row.quantity))
+  }
+
+  const createdAt = dateValue(importedAt)
+  const items = []
+  const adjustments = []
+  for (const row of data.product_variants) {
+    const variant = variants.get(row.id)
+    if (!variant) continue
+    const currentQuantity = number(row.quantity)
+    const calculatedQuantity = number(expected.get(row.id))
+    const adjustmentNeeded = currentQuantity - calculatedQuantity
+    if (adjustmentNeeded === 0) continue
+
+    const productId = variant.productId || row.product_id || null
+    const notes = [
+      `الرصيد الفعلي المحفوظ قبل الاستيراد: ${currentQuantity}`,
+      `الرصيد المحسوب من سجلات التشغيل المستوردة: ${calculatedQuantity}`,
+      'تسوية عند الاستيراد فقط؛ تم الاحتفاظ بالحركات الأصلية دون تعديل في legacy_archive__stock_movements.',
+    ].join(' | ')
+
+    items.push({
+      sku: row.sku || variant.sku || row.id,
+      variantId: row.id,
+      currentQuantity,
+      calculatedQuantity,
+      adjustmentNeeded,
+    })
+    adjustments.push({
+      id: randomUUID(),
+      variantId: row.id,
+      productId,
+      userId: null,
+      type: 'adjustment',
+      quantityChange: adjustmentNeeded,
+      reason: 'تسوية رصيد المخزون عند استيراد البيانات',
+      notes,
+      createdAt,
+    })
+  }
+
+  return {
+    adjustmentCount: adjustments.length,
+    netAdjustmentUnits: adjustments.reduce((sum, row) => sum + row.quantityChange, 0),
+    items,
+    adjustments,
+  }
+}
+
 function archiveLegacyTables(sourceDb, targetDb, names) {
   const counts = {}
   for (const name of names) {
@@ -375,7 +458,19 @@ export async function createImportPlan(sourcePath) {
   sourceDb.exec('PRAGMA query_only = ON')
   try {
     const inspected = inspectSource(sourceDb)
-    return { ...inspected.report, _data: inspected.data, _linkPlan: inspected.linkPlan, _sourcePath: realSource }
+    const models = activeModelRows(inspected.data, inspected.linkPlan)
+    const stockLedgerReconciliation = reconcileStockLedger(inspected.data, models)
+    return {
+      ...inspected.report,
+      stockLedgerReconciliation: {
+        adjustmentCount: stockLedgerReconciliation.adjustmentCount,
+        netAdjustmentUnits: stockLedgerReconciliation.netAdjustmentUnits,
+        items: stockLedgerReconciliation.items,
+      },
+      _data: inspected.data,
+      _linkPlan: inspected.linkPlan,
+      _sourcePath: realSource,
+    }
   } finally {
     sourceDb.close()
   }
@@ -397,6 +492,9 @@ export async function importLegacyDatabase({ sourcePath, targetPath }) {
     const inspected = inspectSource(sourceDb)
     const names = dbTableNames(sourceDb)
     const models = activeModelRows(inspected.data, inspected.linkPlan)
+    const importedAt = new Date().toISOString()
+    const stockLedgerReconciliation = reconcileStockLedger(inspected.data, models, importedAt)
+    models.StockAdjustment.push(...stockLedgerReconciliation.adjustments)
     targetDb.exec('PRAGMA foreign_keys = ON')
     targetDb.exec('BEGIN IMMEDIATE')
     let archivedCounts = {}
@@ -414,13 +512,21 @@ export async function importLegacyDatabase({ sourcePath, targetPath }) {
         archivedLegacyTableCounts: archivedCounts,
         importedModelCounts: Object.fromEntries(Object.entries(models).map(([model, rows]) => [model, rows.length])),
         repairedSaleReturnLinks: inspected.linkPlan.repairs,
+        stockLedgerReconciliation: {
+          adjustmentCount: stockLedgerReconciliation.adjustmentCount,
+          netAdjustmentUnits: stockLedgerReconciliation.netAdjustmentUnits,
+          items: stockLedgerReconciliation.items,
+          appliedAt: importedAt,
+          sourceOnHandQuantitiesPreserved: true,
+          originalStockMovementsPreservedIn: 'legacy_archive__stock_movements',
+        },
         warnings: {
           userAccountsNeedingPasswordRotation: inspected.report.usersWithoutPassword,
           oldOpenRegisterSessionsToReview: inspected.report.openRegisterSessions,
           historicalPurchasePaymentMethodUnavailable: inspected.data.purchases.filter((row) => number(row.paid) > 0).length,
           sourceSyncTablesArchivedOnly: ['sync_queue','settings'].filter((table) => names.includes(table)),
         },
-        importedAt: new Date().toISOString(),
+        importedAt,
       }
       targetDb.exec(`CREATE TABLE "_legacy_import_manifest" (id INTEGER PRIMARY KEY CHECK (id = 1), source_sha256 TEXT NOT NULL, imported_at TEXT NOT NULL, report_json TEXT NOT NULL)`)
       targetDb.prepare('INSERT INTO "_legacy_import_manifest" (id, source_sha256, imported_at, report_json) VALUES (1, ?, ?, ?)').run(sourceSha256, manifestReport.importedAt, JSON.stringify(manifestReport))
