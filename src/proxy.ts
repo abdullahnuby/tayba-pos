@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { isUnsafeCrossOriginRequest } from '@/lib/request-origin'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 /**
  * Apply browser security controls centrally, before any API route executes.
@@ -7,11 +8,27 @@ import { isUnsafeCrossOriginRequest } from '@/lib/request-origin'
  * are never required.
  */
 export function proxy(req: NextRequest) {
-  if (req.nextUrl.pathname.startsWith('/api/') && isUnsafeCrossOriginRequest(req)) {
+  const isApi = req.nextUrl.pathname.startsWith('/api/')
+  const method = req.method.toUpperCase()
+  const unsafeWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
+
+  if (isApi && unsafeWrite && isUnsafeCrossOriginRequest(req)) {
     return NextResponse.json(
       { error: 'تم رفض الطلب لأنه صادر من مصدر مختلف عن البرنامج' },
       { status: 403, headers: { 'Cache-Control': 'no-store' } },
     )
+  }
+
+  // Enforce a write limit even for routes that use getCurrentUser() directly
+  // rather than the shared authenticate() helper. Specific endpoints retain
+  // their tighter login/setup/PIN limits in addition to this global ceiling.
+  if (isApi && unsafeWrite) {
+    const limited = applyRateLimit(req, 'proxy-api-write', RATE_LIMITS.api_write.max, RATE_LIMITS.api_write.window)
+    if (limited) {
+      limited.headers.set('Cache-Control', 'no-store')
+      limited.headers.set('X-Content-Type-Options', 'nosniff')
+      return limited
+    }
   }
 
   const response = NextResponse.next()
@@ -21,7 +38,7 @@ export function proxy(req: NextRequest) {
   response.headers.set('X-XSS-Protection', '1; mode=block')
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
 
-  if (req.nextUrl.pathname.startsWith('/api/')) {
+  if (isApi) {
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   }
 
