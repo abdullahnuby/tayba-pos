@@ -30,6 +30,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const submissionKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const setSection = useAppStore(s => s.setSection)
   const barcodeRef = useRef<HTMLInputElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -153,11 +154,22 @@ export function SalesSection({ user }: { user: SessionUser }) {
   function changeQty(index: number, delta: number) { setCart(c => c.map((x, k) => k === index ? { ...x, quantity: Math.max(1, Math.min(Math.floor(x.max / x.factor), x.quantity + delta)) } : x)) }
   function removeItem(index: number) { setCart(c => c.filter((_, k) => k !== index)) }
 
-  function scanBarcode(code: string) {
-    if (!code.trim()) return
-    const found = products.flatMap(p => p.variants.map(v => ({ v, name: p.name }))).find(x => x.v.barcode === code || x.v.sku === code)
-    if (found) handlePickVariant(found.v, found.name)
-    else toast.error('الباركود غير موجود')
+  function scanBarcode(code: string): boolean {
+    const normalizedCode = code.trim()
+    if (!normalizedCode) return false
+    const normalizedLookup = normalizedCode.toLocaleLowerCase()
+    const found = products
+      .flatMap(p => p.variants.map(v => ({ v, name: p.name })))
+      .find(x =>
+        (x.v.barcode || '').trim().toLocaleLowerCase() === normalizedLookup ||
+        x.v.sku.trim().toLocaleLowerCase() === normalizedLookup,
+      )
+    if (!found) {
+      toast.error('لم يتم العثور على صنف بهذا الباركود أو كود الصنف')
+      return false
+    }
+    handlePickVariant(found.v, found.name)
+    return true
   }
 
   function quickPay(m: 'cash' | 'card' | 'transfer' | 'credit') { setPaymentMethod(m); setPaid(m === 'credit' ? 0 : total) }
@@ -210,9 +222,9 @@ export function SalesSection({ user }: { user: SessionUser }) {
     {/* Search */}
     <div className="shrink-0 border-b bg-background px-3 py-2.5 sm:px-4">
       <div className="flex gap-2">
-        <div className="relative flex-1"><Search className="absolute right-3 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={e => setSearch(e.target.value)} className="h-12 w-full rounded-2xl border bg-muted/30 px-11 text-sm outline-none focus:ring-2 focus:ring-primary/30" placeholder="ابحث بالباركود أو الاسم أو SKU..." /></div>
-        <input ref={barcodeRef} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); scanBarcode((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = '' } }} inputMode="none" autoComplete="off" className="absolute size-px opacity-0" tabIndex={-1} aria-hidden />
-        <Button type="button" size="icon" className="size-12 shrink-0 rounded-2xl" onClick={() => { const code = prompt('أدخل الباركود'); if (code) scanBarcode(code) }} aria-label="مسح باركود"><Barcode className="size-5" /></Button>
+        <div className="relative flex-1"><Search className="absolute right-3 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" /><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && search.trim()) { e.preventDefault(); if (scanBarcode(search)) setSearch('') } }} aria-label="بحث أو مسح باركود" className="h-12 w-full rounded-2xl border bg-muted/30 px-11 text-sm outline-none focus:ring-2 focus:ring-primary/30" placeholder="امسح الباركود أو ابحث بالاسم أو SKU..." /></div>
+        <input ref={barcodeRef} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const target = e.target as HTMLInputElement; scanBarcode(target.value); target.value = '' } }} inputMode="none" autoComplete="off" className="absolute size-px opacity-0" tabIndex={-1} aria-hidden />
+        <Button type="button" size="icon" className="size-12 shrink-0 rounded-2xl" onClick={() => { searchRef.current?.focus(); searchRef.current?.select() }} aria-label="تجهيز قارئ الباركود" title="ضع المؤشر في خانة المسح ثم امسح الباركود"><Barcode className="size-5" /></Button>
       </div>
     </div>
 
@@ -307,10 +319,10 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <Dialog open={customerDialog} onOpenChange={v => !saveCustomer.isPending && setCustomerDialog(v)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>إضافة عميل سريع</DialogTitle></DialogHeader><div className="space-y-3"><div><Label>الاسم *</Label><Input value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} /></div><div><Label>الهاتف</Label><Input value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value })} dir="ltr" /></div></div><DialogFooter><Button variant="outline" onClick={() => setCustomerDialog(false)} disabled={saveCustomer.isPending}>إلغاء</Button><Button onClick={() => saveCustomer.mutate(customerForm)} disabled={saveCustomer.isPending || !customerForm.name.trim()}>{saveCustomer.isPending ? 'جارٍ الحفظ...' : 'حفظ العميل'}</Button></DialogFooter></DialogContent></Dialog>
 
     {/* Receipt after checkout */}
-    <Dialog open={!!printing} onOpenChange={v => !v && setPrinting(null)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة تمت بنجاح</DialogTitle></DialogHeader>{printing && <div id="printable-invoice" className="rounded-xl border bg-white p-4 text-black"><div className="text-center text-xl font-black">طيبة</div><div className="mt-2 text-sm">فاتورة: {printing.invoiceNo}</div><div className="text-sm">التاريخ: {formatDateTime(printing.date)}</div>{printing.items.map(i => <div key={i.id} className="flex justify-between border-b py-2 text-sm"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="mt-3 flex justify-between font-black"><span>الإجمالي</span><span>{money(printing.total)}</span></div></div>}<div className="grid grid-cols-2 gap-2"><Button onClick={() => window.print()}><Printer className="size-4" /> طباعة</Button><Button variant="outline" onClick={() => printing && shareReceipt(printing)}><Share2 className="size-4" /> مشاركة</Button></div><Button className="w-full" onClick={() => setPrinting(null)}><CheckCircle2 className="size-4" /> فاتورة جديدة</Button></DialogContent></Dialog>
+    <Dialog open={!!printing} onOpenChange={v => { if (!v) { setPrinting(null); window.setTimeout(() => barcodeRef.current?.focus(), 100) } }}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة تمت بنجاح</DialogTitle></DialogHeader>{printing && <div id="printable-invoice" className="rounded-xl border bg-white p-4 text-black"><div className="text-center text-xl font-black">طيبة</div><div className="mt-2 text-sm">فاتورة: {printing.invoiceNo}</div><div className="text-sm">التاريخ: {formatDateTime(printing.date)}</div>{printing.items.map(i => <div key={i.id} className="flex justify-between border-b py-2 text-sm"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="mt-3 flex justify-between font-black"><span>الإجمالي</span><span>{money(printing.total)}</span></div></div>}<div className="grid grid-cols-2 gap-2"><Button onClick={() => window.print()}><Printer className="size-4" /> طباعة</Button><Button variant="outline" onClick={() => printing && shareReceipt(printing)}><Share2 className="size-4" /> مشاركة</Button></div><Button className="w-full" onClick={() => { setPrinting(null); window.setTimeout(() => barcodeRef.current?.focus(), 100) }}><CheckCircle2 className="size-4" /> فاتورة جديدة</Button></DialogContent></Dialog>
 
     {/* History */}
     <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-h-[90dvh] overflow-y-auto rounded-3xl sm:max-w-2xl"><DialogHeader><DialogTitle>سجل الفواتير</DialogTitle></DialogHeader>{salesQuery.isLoading ? <Skeleton className="h-24" /> : <div className="space-y-2">{sales.map(s => <div key={s.id} className="rounded-xl border p-3"><div className="flex justify-between"><b>{s.invoiceNo}</b><Badge variant={saleStatusBadgeVariant(s.status)}>{saleStatusLabel(s.status)}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{formatDateTime(s.date)} · {s.customer?.name || 'عميل نقدي'}</div><div className="mt-2 flex justify-between"><b>{money(s.total)}</b><Button size="sm" variant="outline" onClick={() => setViewing(s)}><Eye className="size-4" /> عرض</Button></div></div>)}</div>}</DialogContent></Dialog>
-    <Dialog open={!!viewing} onOpenChange={v => !v && setViewing(null)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة {viewing?.invoiceNo}</DialogTitle></DialogHeader>{viewing && <div className="space-y-2">{viewing.items.map(i => <div key={i.id} className="flex justify-between rounded-xl border p-3"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="flex justify-between rounded-xl bg-muted p-3"><span>الإجمالي</span><b>{money(viewing.total)}</b></div></div>}</DialogContent></Dialog>
+    <Dialog open={!!viewing} onOpenChange={v => !v && setViewing(null)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة {viewing?.invoiceNo}</DialogTitle></DialogHeader>{viewing && <div className="space-y-2">{viewing.items.map(i => <div key={i.id} className="flex justify-between rounded-xl border p-3"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="flex justify-between rounded-xl bg-muted p-3"><span>الإجمالي</span><b>{money(viewing.total)}</b></div></div>}{viewing && <DialogFooter><Button className="w-full" onClick={() => { setPrinting(viewing); setViewing(null) }}><Printer className="size-4" /> إعادة طباعة الفاتورة</Button></DialogFooter>}</DialogContent></Dialog>
   </div>
 }

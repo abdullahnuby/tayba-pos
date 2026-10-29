@@ -301,6 +301,7 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
     }),
     /يتجاوز الكمية المباعة/,
   )
+  const returnCountBefore = await db.saleReturn.count()
   const first = await localAtomicAction<any>(db, 'commit_sale_return', {
     payload: {
       saleId,
@@ -320,7 +321,7 @@ test('sale returns use source invoice prices, reject duplicate-line overreturns,
   assert.equal(first.id, repeated.id)
   assert.equal(first.total, 10)
   assert.equal(first.refundAmount, 10)
-  assert.equal(await db.saleReturn.count(), 1)
+  assert.equal(await db.saleReturn.count(), returnCountBefore + 1)
   const quantityAfterFirstReturn = (await db.productVariant.findUniqueOrThrow({ where: { id: variantId } })).quantity
   assert.equal(quantityAfterFirstReturn, quantityBeforeReturns + 1)
 
@@ -796,9 +797,10 @@ test('bulk stock adjustment is all-or-nothing if one variant is invalid', async 
   assert.equal(await db.stockAdjustment.count(), beforeCount)
 })
 test('sale cash refund uses current account balance after an unallocated customer payment', async () => {
+  const returnCustomer = await db.customer.create({ data: { name: 'CI isolated return customer' } })
   const sale = await localAtomicAction<any>(db, 'commit_sale', {
     payload: {
-      customerId,
+      customerId: returnCustomer.id,
       items: [{ variantId, quantity: 1, unitPrice: 10 }],
       discount: 0,
       paid: 0,
@@ -810,7 +812,7 @@ test('sale cash refund uses current account balance after an unallocated custome
   await db.customer.update({ where: { id: customerId }, data: { balance: { decrement: 10 } } })
   await db.customerPayment.create({
     data: {
-      customerId,
+      customerId: returnCustomer.id,
       saleId: null,
       amount: 10,
       method: 'cash',

@@ -593,13 +593,13 @@ export async function localAtomicAction<T = any>(
             refundAmount,
             idempotencyKey: idempotencyKey || null,
             items: {
-              create: normalized.map((item) => ({
+              create: normalized.map((item, index) => ({
                 id: id(),
                 purchaseItemId: item.purchaseItem.id,
                 variantId: item.purchaseItem.variantId,
                 quantity: item.quantity,
                 unitCost: item.purchaseItem.unitCost,
-                total: money(item.purchaseItem.unitCost * item.quantity),
+                total: returnLineTotals[index],
               })),
             },
           },
