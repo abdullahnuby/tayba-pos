@@ -1,8 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { getCurrentUser, verifyPassword } from '@/lib/auth'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 export async function POST(req: NextRequest) {
+  const limited = applyRateLimit(req, 'verify-password', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
+  if (limited) return limited
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
   try {
