@@ -4,7 +4,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { dirname, basename, relative, resolve, sep, join } from 'node:path'
-import { fileURLToPath, pathToFileURL } from 'node:url'
+import { fileURLToPath } from 'node:url'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const REQUIRED_TABLES = [
@@ -14,7 +14,6 @@ const REQUIRED_TABLES = [
   'supplier_payments', 'settings', 'stock_movements', 'audit_logs',
 ]
 const RETIRED_SETTING = /^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync)/i
-const quote = (value) => '"' + String(value).replaceAll('"', '""') + "'"
 const qid = (value) => '"' + String(value).replaceAll('"', '""') + '"'
 const number = (value, fallback = 0) => {
   const parsed = Number(value)
@@ -26,7 +25,7 @@ function dateValue(value, fallback = null) {
   if (value == null || value === '') return fallback
   let input = String(value).trim()
   if (!input.includes('T')) input = input.replace(' ', 'T')
-  if (!/(Z|[+-]\\d{2}:\\d{2})$/i.test(input)) input += 'Z'
+  if (!/(Z|[+-]\d{2}:\d{2})$/i.test(input)) input += 'Z'
   const parsed = new Date(input)
   if (Number.isNaN(parsed.getTime())) throw new Error(`تاريخ قديم غير قابل للقراءة: ${String(value)}`)
   return parsed.toISOString().replace('T', ' ').replace('Z', '')
@@ -196,19 +195,19 @@ function activeModelRows(data, linkPlan) {
   setDefault('returnPrefix', 'RET')
   setDefault('purchaseReturnPrefix', 'PRET')
   setDefault('saleCounter', String(Math.max(data.sales.length, ...data.sales.map((row) => {
-    const match = /^INV-(\\d+)$/.exec(String(row.invoice_no || ''))
+    const match = /^INV-(\d+)$/.exec(String(row.invoice_no || ''))
     return match ? Number(match[1]) : 0
   }))))
   setDefault('purchaseCounter', String(Math.max(data.purchases.length, ...data.purchases.map((row) => {
-    const match = /^PUR-(\\d+)$/.exec(String(row.invoice_no || ''))
+    const match = /^PUR-(\d+)$/.exec(String(row.invoice_no || ''))
     return match ? Number(match[1]) : 0
   }))))
   setDefault('returnCounter', String(Math.max(data.sale_returns.length, ...data.sale_returns.map((row) => {
-    const match = /^RET-(\\d+)$/.exec(String(row.return_no || ''))
+    const match = /^RET-(\d+)$/.exec(String(row.return_no || ''))
     return match ? Number(match[1]) : 0
   }))))
   setDefault('purchaseReturnCounter', String(Math.max(data.purchase_returns.length, ...data.purchase_returns.map((row) => {
-    const match = /^PRET-(\\d+)$/.exec(String(row.return_no || ''))
+    const match = /^PRET-(\d+)$/.exec(String(row.return_no || ''))
     return match ? Number(match[1]) : 0
   }))))
 
@@ -455,17 +454,17 @@ async function main() {
   if (args.dryRun) {
     const plan = await createImportPlan(args.source)
     const { _data, _linkPlan, _sourcePath, ...report } = plan
-    process.stdout.write(JSON.stringify(report, null, 2) + '\\n')
+    process.stdout.write(JSON.stringify(report, null, 2) + '\n')
     if (!report.canImport) process.exitCode = 2
     return
   }
   const result = await importLegacyDatabase({ sourcePath: args.source, targetPath: args.target })
-  process.stdout.write(JSON.stringify(result, null, 2) + '\\n')
+  process.stdout.write(JSON.stringify(result, null, 2) + '\n')
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   main().catch((error) => {
-    process.stderr.write((error instanceof Error ? error.message : String(error)) + '\\n')
+    process.stderr.write((error instanceof Error ? error.message : String(error)) + '\n')
     process.exitCode = 1
   })
 }
