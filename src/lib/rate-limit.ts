@@ -54,10 +54,14 @@ export function rateLimit(
  * Get client IP from Next.js request headers.
  */
 export function getClientIpFromHeaders(headers: Headers): string {
+  // This application binds to loopback and must not trust forwarding headers
+  // supplied directly by a browser/client. Only opt in behind a known,
+  // correctly configured reverse proxy.
+  if (process.env.TRUST_PROXY_HEADERS !== 'true') return 'local'
+
   return (
     headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
     headers.get('x-real-ip') ||
-    headers.get('cf-connecting-ip') ||
     'unknown'
   )
 }
