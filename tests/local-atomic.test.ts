@@ -105,7 +105,7 @@ test('split returns reconcile exactly to invoice totals despite fractional unit 
     },
   })
   assert.equal(sale.total, 1)
-  const saleReturns = []
+  const saleReturns: Array<{ total: number; items: Array<{ total: number }> }> = []
   for (let index = 0; index < 3; index++) {
     saleReturns.push(await localAtomicAction<any>(db, 'commit_sale_return', {
       payload: {
@@ -135,7 +135,7 @@ test('split returns reconcile exactly to invoice totals despite fractional unit 
     },
   })
   assert.equal(purchase.total, 1)
-  const purchaseReturns = []
+  const purchaseReturns: Array<{ total: number; items: Array<{ total: number }> }> = []
   for (let index = 0; index < 3; index++) {
     purchaseReturns.push(await localAtomicAction<any>(db, 'commit_purchase_return', {
       payload: {

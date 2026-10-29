@@ -7,7 +7,7 @@ import { getClientIp } from './auth'
 
 export async function auditLog(params: {
   user?: SessionUser | null
-  action: 'create' | 'update' | 'delete' | 'void' | 'return' | 'payment' | 'login' | 'logout' | 'stock_adjust' | 'register_open' | 'register_close' | 'manager_override' | 'password_change'
+  action: 'create' | 'update' | 'delete' | 'void' | 'return' | 'payment' | 'login' | 'logout' | 'stock_adjust' | 'register_open' | 'register_close' | 'manager_override' | 'password_change' | 'security_setting_update'
   entity: string
   entityId?: string
   before?: unknown

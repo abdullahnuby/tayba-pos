@@ -24,6 +24,7 @@ const ACTION_LABELS: Record<string, string> = {
   stock_adjust: 'تعديل مخزون',
   register_open: 'فتح وردية',
   register_close: 'إغلاق وردية',
+  security_setting_update: 'تعديل إعداد أمني',
 }
 
 const ENTITY_LABELS: Record<string, string> = {

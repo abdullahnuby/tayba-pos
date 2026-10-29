@@ -12,7 +12,7 @@ export async function POST(req: NextRequest) {
     const body = await req.json()
     const password = String(body.password || '')
     const row = await db.user.findUnique({ where: { id: user.id }, select: { passwordHash: true } })
-    if (!row || !verifyPassword(password, row.passwordHash)) return NextResponse.json({ ok: false, error: 'كلمة المرور غير صحيحة' }, { status: 403 })
+    if (!row?.passwordHash || !verifyPassword(password, row.passwordHash)) return NextResponse.json({ ok: false, error: 'كلمة المرور غير صحيحة' }, { status: 403 })
     return NextResponse.json({ ok: true })
   } catch { return NextResponse.json({ ok: false, error: 'بيانات غير صحيحة' }, { status: 400 }) }
 }
