@@ -5,7 +5,7 @@ import { createSessionToken, verifySessionToken, type SessionUser } from '../src
 
 test('signed sessions carry the per-user epoch and reject tampering', () => {
   const previous = process.env.AUTH_SECRET
-  process.env.AUTH_SECRET = 'test-only-session-epoch-secret-value-32-chars'
+  process.env.AUTH_SECRET = TEST_SECRET
   try {
     const user: SessionUser = {
       id: 'ci-session-user',
@@ -33,7 +33,7 @@ test('signed sessions carry the per-user epoch and reject tampering', () => {
 
 test('tokens missing a session epoch are rejected to invalidate legacy cookies', () => {
   const previous = process.env.AUTH_SECRET
-  process.env.AUTH_SECRET = 'test-only-session-epoch-secret-value-32-chars'
+  process.env.AUTH_SECRET = TEST_SECRET
   try {
     const user: SessionUser = {
       id: 'ci-legacy-session',
@@ -47,7 +47,7 @@ test('tokens missing a session epoch are rejected to invalidate legacy cookies',
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     delete payload.sessionEpoch
     const legacyBody = Buffer.from(JSON.stringify(payload)).toString('base64url')
-    const signature = createHmac('sha256', process.env.AUTH_SECRET).update(legacyBody).digest('base64url')
+    const signature = createHmac('sha256', TEST_SECRET).update(legacyBody).digest('base64url')
     assert.equal(verifySessionToken(`${legacyBody}.${signature}`), null)
   } finally {
     if (previous === undefined) delete process.env.AUTH_SECRET
