@@ -49,6 +49,8 @@ jobs:
         run: node --test tests/safe-db-setup.test.mjs
       - name: Test same-origin API write protection
         run: node --experimental-strip-types --test tests/request-origin.test.ts
+      - name: Test legacy SQLite import into an isolated target
+        run: node --test tests/legacy-import.test.mjs
       - name: TypeScript check
         run: npx tsc --noEmit
       - name: Lint
