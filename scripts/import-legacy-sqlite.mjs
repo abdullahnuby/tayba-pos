@@ -123,7 +123,6 @@ function inspectSource(sourceDb) {
   const linkPlan = resolveReturnItemLinks(data.sales, data.sale_items, data.sale_returns, data.sale_return_items)
   const foreignKeyIssues = sourceDb.prepare('PRAGMA foreign_key_check').all()
   const otherForeignKeyIssues = foreignKeyIssues.filter((issue) => issue.table !== 'sale_return_items')
-  const saleReturnsById = new Map(data.sale_returns.map((row) => [row.id, row]))
   const lineSums = new Map()
   for (const item of linkPlan.mapped) lineSums.set(item.sale_return_id, (lineSums.get(item.sale_return_id) || 0) + number(item.total))
   const returnAmountIssues = data.sale_returns.filter((header) => {
@@ -135,7 +134,15 @@ function inspectSource(sourceDb) {
     lineTotal: number(lineSums.get(header.id) || 0),
   }))
   const duplicateIssues = []
-  for (const [table, column] of [['users','username'],['product_variants','sku'],['product_variants','barcode'],['sales','invoice_no'],['purchases','invoice_no'],['sale_returns','return_no'],['purchase_returns','return_no']]) {
+  for (const [table, column] of [
+    ['users','username'], ['categories','name'], ['brands','name'],
+    ['product_variants','sku'], ['product_variants','barcode'],
+    ['sales','invoice_no'], ['sales','idempotency_key'],
+    ['purchases','invoice_no'], ['purchases','idempotency_key'],
+    ['sale_returns','return_no'], ['sale_returns','idempotency_key'],
+    ['purchase_returns','return_no'], ['purchase_returns','idempotency_key'],
+    ['customer_payments','idempotency_key'], ['supplier_payments','idempotency_key'],
+  ]) {
     const seen = new Set()
     for (const row of data[table]) {
       const value = row[column]
@@ -181,7 +188,6 @@ function dbTableNames(db) {
 function activeModelRows(data, linkPlan) {
   const sessionById = new Map(data.register_sessions.map((row) => [row.id, row]))
   const variantById = new Map(data.product_variants.map((row) => [row.id, row]))
-  const saleById = new Map(data.sales.map((row) => [row.id, row]))
   const importedSettings = new Map(data.settings.filter((row) => !RETIRED_SETTING.test(row.key)).map((row) => [row.key, row.value]))
   const setDefault = (key, value) => { if (!importedSettings.has(key)) importedSettings.set(key, value) }
   setDefault('vatInclusive', 'false')
