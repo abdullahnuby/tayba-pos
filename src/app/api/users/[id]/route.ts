@@ -1,12 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { db } from '@/lib/db'
 import {
   requireUser,
   hashPassword,
   validatePasswordPolicy,
-  flagMustChangePassword,
-  rotateSessionEpoch,
-  hashPin,
+   hashPin,
   validatePinPolicy,
 } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
@@ -86,18 +85,31 @@ export async function PATCH(
       }
     }
 
-    const updated = await db.user.update({
-      where: { id },
-      data,
-      select: { id: true, username: true, name: true, role: true, active: true },
+    const revokeSessions = passwordReset || data.active !== undefined ||
+      (typeof data.role === 'string' && data.role !== target.role)
+    const nextEpoch = revokeSessions ? randomUUID() : null
+    const updated = await db.$transaction(async (tx) => {
+      const nextUser = await tx.user.update({
+        where: { id },
+        data,
+        select: { id: true, username: true, name: true, role: true, active: true },
+      })
+      if (passwordReset) {
+        await tx.setting.upsert({
+          where: { key: `mustChangePw:${nextUser.id}` },
+          create: { key: `mustChangePw:${nextUser.id}`, value: '1' },
+          update: { value: '1' },
+        })
+      }
+      if (nextEpoch) {
+        await tx.setting.upsert({
+          where: { key: `sessionEpoch:${nextUser.id}` },
+          create: { key: `sessionEpoch:${nextUser.id}`, value: nextEpoch },
+          update: { value: nextEpoch },
+        })
+      }
+      return nextUser
     })
-
-    if (passwordReset) {
-      await flagMustChangePassword(updated.id)
-    }
-    if (passwordReset || data.active !== undefined || (typeof data.role === 'string' && data.role !== target.role)) {
-      await rotateSessionEpoch(updated.id)
-    }
 
     await auditLog({
       user: me,
