@@ -362,7 +362,7 @@ export const SESSION_MAX_AGE =
 // Server-side helpers
 // -----------------------------------------------------
 
-export async function getCurrentUser(): Promise<SessionUser | null> {
+export async function getCurrentUser(options: { allowMustChangePassword?: boolean } = {}): Promise<SessionUser | null> {
   try {
     const cookieStore =
       await cookies()
@@ -384,6 +384,9 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
     if (!liveUser?.active) return null
 
     const changeFlag = await db.setting.findUnique({ where: { key: `mustChangePw:${liveUser.id}` } })
+    const mustChangePassword = changeFlag?.value === '1'
+    if (mustChangePassword && !options.allowMustChangePassword) return null
+
     const role: SessionUser['role'] | null = ['admin', 'manager', 'cashier'].includes(liveUser.role) ? liveUser.role as SessionUser['role'] : null
     if (!role) return null
 
@@ -392,7 +395,7 @@ export async function getCurrentUser(): Promise<SessionUser | null> {
       username: liveUser.username,
       name: liveUser.name,
       role,
-      mustChangePassword: changeFlag?.value === '1',
+      mustChangePassword,
     }
   } catch {
     return null
