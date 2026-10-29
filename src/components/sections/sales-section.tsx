@@ -207,7 +207,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <div className="shrink-0 border-b bg-background px-3 py-2.5 sm:px-4">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" className="size-10 rounded-2xl lg:hidden" onClick={() => setSection('dashboard')} aria-label="لوحة التحكم"><Menu className="size-5" /></Button>
+          <Button variant="outline" size="icon" className="size-10 rounded-2xl lg:hidden" onClick={() => setSection(user.role === 'cashier' ? 'register' : 'dashboard')} aria-label={user.role === 'cashier' ? 'الوردية' : 'لوحة التحكم'} title={user.role === 'cashier' ? 'الانتقال إلى الوردية' : 'لوحة التحكم'}><Menu className="size-5" /></Button>
           <ReceiptText className="size-5 text-primary" /><b className="text-lg">نقطة البيع</b>
           {openShift && <Badge className="hidden xs:inline-flex">وردية مفتوحة</Badge>}
         </div>
