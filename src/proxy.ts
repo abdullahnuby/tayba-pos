@@ -1,28 +1,27 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isUnsafeCrossOriginRequest } from '@/lib/request-origin'
 
 /**
- * Next.js middleware — applies security headers to all responses.
- *
- * Headers added:
- * - X-Content-Type-Options: nosniff
- * - X-Frame-Options: DENY (prevents clickjacking)
- * - Referrer-Policy: strict-origin-when-cross-origin
- * - X-XSS-Protection: 1; mode=block (legacy, but doesn't hurt)
- *
- * Note: HSTS is handled by Caddy/HTTPS proxy in production.
+ * Apply browser security controls centrally, before any API route executes.
+ * The app is intended to run as a local POS, so cross-origin browser writes
+ * are never required.
  */
-export function proxy(_req: NextRequest) {
-  const response = NextResponse.next()
+export function proxy(req: NextRequest) {
+  if (req.nextUrl.pathname.startsWith('/api/') && isUnsafeCrossOriginRequest(req)) {
+    return NextResponse.json(
+      { error: 'تم رفض الطلب لأنه صادر من مصدر مختلف عن البرنامج' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    )
+  }
 
-  // Security headers
+  const response = NextResponse.next()
   response.headers.set('X-Content-Type-Options', 'nosniff')
   response.headers.set('X-Frame-Options', 'DENY')
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
   response.headers.set('X-XSS-Protection', '1; mode=block')
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
 
-  // Cache control for API responses (no caching of sensitive data)
-  if (_req.nextUrl.pathname.startsWith('/api/')) {
+  if (req.nextUrl.pathname.startsWith('/api/')) {
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   }
 
@@ -31,12 +30,6 @@ export function proxy(_req: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
-     * - favicon.ico, robots.txt, logo.svg
-     */
     '/((?!_next/static|_next/image|favicon.ico|robots.txt|logo.svg).*)',
   ],
 }
