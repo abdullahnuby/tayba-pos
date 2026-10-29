@@ -21,7 +21,7 @@ interface Variant { id: string; sku: string; barcode: string | null; size: strin
 interface Product { id: string; name: string; category?: { id: string; name: string } | null; variants: Variant[] }
 interface Customer { id: string; name: string; phone?: string | null }
 interface CartItem { variantId: string; name: string; sku: string; size: string | null; color: string | null; price: number; quantity: number; max: number; unit: string; factor: number; packLabel?: string }
-interface Sale { id: string; invoiceNo: string; date: string; total: number; paid: number; change: number; paymentMethod: string; status: string; customer?: { name: string } | null; items: Array<{ id: string; quantity: number; total: number; variant: { product: { name: string }; sku: string; size: string | null; color: string | null } }> }
+interface Sale { id: string; invoiceNo: string; date: string; subtotal?: number; discount?: number; taxAmount?: number; total: number; paid: number; change: number; paymentMethod: string; status: string; customer?: { name: string } | null; items: Array<{ id: string; quantity: number; total: number; variant: { product: { name: string }; sku: string; size: string | null; color: string | null } }> }
 
 function money(v: number) { return `${formatEGP(v)} ج.م` }
 
@@ -29,8 +29,12 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const qc = useQueryClient()
   const submissionKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const setSection = useAppStore(s => s.setSection)
-  const barcodeRef = useRef<HTMLInputElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
+  const scannerBufferRef = useRef('')
+  const scannerLastKeyAtRef = useRef(0)
+  const scannerTimerRef = useRef<number | null>(null)
+  const scannerActionRef = useRef<((code: string, notifyUnknown?: boolean) => boolean) | null>(null)
+  const scannerEnabledRef = useRef(true)
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -90,7 +94,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase()
-    return products.filter(p => (category === 'all' || (p.category?.id || 'none') === category) && (!q || p.name.toLowerCase().includes(q) || p.variants.some(v => v.sku.toLowerCase().includes(q) || (v.barcode || '').includes(q)))).slice(0, 100)
+    return products.filter(p => (category === 'all' || (p.category?.id || 'none') === category) && (!q || p.name.toLowerCase().includes(q) || p.variants.some(v => v.sku.trim().toLowerCase().includes(q) || (v.barcode || '').trim().toLowerCase().includes(q)))).slice(0, 100)
   }, [products, search, category])
 
   const selectedCustomer = customers.find(c => c.id === customerId)
@@ -120,9 +124,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
     onError: (e: Error) => toast.error(e.message),
   })
 
-  useEffect(() => { setTimeout(() => barcodeRef.current?.focus(), 150) }, [])
-
-  function resetSale() { clearIdempotencyKey(submissionKeyRef); setCart([]); setCustomerId(''); setCustomerPickerOpen(false); setPaymentMethod('cash'); setPaid(0); setDiscount(0); setHistorical(false); setSaleDate(new Date().toISOString().slice(0, 10)); setSearch(''); setTimeout(() => barcodeRef.current?.focus(), 100) }
+  function resetSale() { clearIdempotencyKey(submissionKeyRef); setCart([]); setCustomerId(''); setCustomerPickerOpen(false); setPaymentMethod('cash'); setPaid(0); setDiscount(0); setHistorical(false); setSaleDate(new Date().toISOString().slice(0, 10)); setSearch(''); setTimeout(() => searchRef.current?.focus(), 100) }
 
   function hasPackPricing(v: Variant) { return (v.quarterDozenPrice ?? 0) > 0 || (v.halfDozenPrice ?? 0) > 0 || (v.dozenPrice ?? 0) > 0 }
   function chooseProduct(p: Product) {
@@ -150,15 +152,14 @@ export function SalesSection({ user }: { user: SessionUser }) {
       }
       return [...prev, { variantId: v.id, name: productName, sku: v.sku, size: v.size, color: v.color, price, quantity: 1, max: v.quantity, unit, factor, packLabel: pack?.label }]
     })
-    setSelectedProduct(null); setUnitPickerFor(null); setSearch(''); setTimeout(() => barcodeRef.current?.focus(), 50)
+    setSelectedProduct(null); setUnitPickerFor(null); setSearch(''); setTimeout(() => searchRef.current?.focus(), 50)
   }
   function changeQty(index: number, delta: number) { setCart(c => c.map((x, k) => k === index ? { ...x, quantity: Math.max(1, Math.min(Math.floor(x.max / x.factor), x.quantity + delta)) } : x)) }
   function removeItem(index: number) { setCart(c => c.filter((_, k) => k !== index)) }
 
-  function scanBarcode(code: string): boolean {
-    const normalizedCode = code.trim()
-    if (!normalizedCode) return false
-    const normalizedLookup = normalizedCode.toLocaleLowerCase()
+  function scanBarcode(code: string, notifyUnknown = true): boolean {
+    const normalizedLookup = code.trim().toLocaleLowerCase()
+    if (!normalizedLookup) return false
     const found = products
       .flatMap(p => p.variants.map(v => ({ v, name: p.name })))
       .find(x =>
@@ -166,12 +167,81 @@ export function SalesSection({ user }: { user: SessionUser }) {
         x.v.sku.trim().toLocaleLowerCase() === normalizedLookup,
       )
     if (!found) {
-      toast.error('لم يتم العثور على صنف بهذا الباركود أو كود الصنف')
+      if (notifyUnknown) toast.error('لم يتم العثور على صنف بهذا الباركود أو كود الصنف')
       return false
     }
     handlePickVariant(found.v, found.name)
     return true
   }
+
+  scannerActionRef.current = scanBarcode
+  scannerEnabledRef.current = !checkout && !customerDialog && !historyOpen && !viewing && !printing && !selectedProduct && !unitPickerFor
+
+  useEffect(() => {
+    const clearScannerBuffer = () => {
+      scannerBufferRef.current = ''
+      scannerLastKeyAtRef.current = 0
+      if (scannerTimerRef.current) window.clearTimeout(scannerTimerRef.current)
+      scannerTimerRef.current = null
+    }
+
+    const handleScannerKeyDown = (event: KeyboardEvent) => {
+      if (!scannerEnabledRef.current || event.ctrlKey || event.metaKey || event.altKey || event.isComposing) {
+        clearScannerBuffer()
+        return
+      }
+
+      const target = event.target instanceof HTMLElement ? event.target : null
+      const isEditable = Boolean(target && (
+        target.isContentEditable || target.matches('input, textarea, select')
+      ))
+      if (isEditable && target !== searchRef.current) {
+        clearScannerBuffer()
+        return
+      }
+
+      if (event.key === 'Enter' || event.key === 'Tab') {
+        const code = scannerBufferRef.current
+        clearScannerBuffer()
+        if (code.length >= 3 && scannerActionRef.current?.(code, false)) {
+          event.preventDefault()
+          event.stopPropagation()
+          if (target === searchRef.current) setSearch('')
+        }
+        return
+      }
+
+      if (event.key.length !== 1) {
+        if (event.key !== 'Shift') clearScannerBuffer()
+        return
+      }
+
+      const now = Date.now()
+      if (now - scannerLastKeyAtRef.current > 100) scannerBufferRef.current = ''
+      scannerBufferRef.current += event.key
+      scannerLastKeyAtRef.current = now
+
+      if (scannerTimerRef.current) window.clearTimeout(scannerTimerRef.current)
+      const targetAtLastKey = target
+      scannerTimerRef.current = window.setTimeout(() => {
+        const code = scannerBufferRef.current
+        scannerBufferRef.current = ''
+        scannerLastKeyAtRef.current = 0
+        scannerTimerRef.current = null
+        if (code.length >= 3 && scannerActionRef.current?.(code, false)) {
+          if (targetAtLastKey === searchRef.current) setSearch('')
+        }
+      }, 180)
+    }
+
+    window.addEventListener('keydown', handleScannerKeyDown, true)
+    const focusTimer = window.setTimeout(() => searchRef.current?.focus(), 150)
+    return () => {
+      window.removeEventListener('keydown', handleScannerKeyDown, true)
+      window.clearTimeout(focusTimer)
+      clearScannerBuffer()
+    }
+  }, [])
 
   function quickPay(m: 'cash' | 'card' | 'transfer' | 'credit') { setPaymentMethod(m); setPaid(m === 'credit' ? 0 : total) }
 
@@ -226,9 +296,8 @@ export function SalesSection({ user }: { user: SessionUser }) {
     {/* Search */}
     <div className="shrink-0 border-b bg-background px-3 py-2.5 sm:px-4">
       <div className="flex gap-2">
-        <div className="relative flex-1"><Search className="absolute right-3 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" /><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && search.trim()) { e.preventDefault(); if (scanBarcode(search)) setSearch('') } }} aria-label="بحث أو مسح باركود" className="h-12 w-full rounded-2xl border bg-muted/30 px-11 text-sm outline-none focus:ring-2 focus:ring-primary/30" placeholder="امسح الباركود أو ابحث بالاسم أو SKU..." /></div>
-        <input ref={barcodeRef} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const target = e.target as HTMLInputElement; scanBarcode(target.value); target.value = '' } }} inputMode="none" autoComplete="off" className="absolute size-px opacity-0" tabIndex={-1} aria-hidden />
-        <Button type="button" size="icon" className="size-12 shrink-0 rounded-2xl" onClick={() => { searchRef.current?.focus(); searchRef.current?.select() }} aria-label="تجهيز قارئ الباركود" title="ضع المؤشر في خانة المسح ثم امسح الباركود"><Barcode className="size-5" /></Button>
+        <div className="relative flex-1"><Search className="absolute right-3 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" /><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && search.trim()) { const matched = scanBarcode(search, false); if (matched) { e.preventDefault(); setSearch('') } } }} aria-label="بحث أو مسح باركود" className="h-12 w-full rounded-2xl border bg-muted/30 px-11 text-sm outline-none focus:ring-2 focus:ring-primary/30" placeholder="امسح الباركود أو ابحث بالاسم أو SKU..." /></div>
+        <Button type="button" size="icon" className="size-12 shrink-0 rounded-2xl" onClick={() => { searchRef.current?.focus(); searchRef.current?.select() }} aria-label="تجهيز قارئ الباركود" title="وجه قارئ USB إلى هذه الشاشة؛ يقبل Enter أو Tab أو المسح بدون لاحقة"><Barcode className="size-5" /></Button>
       </div>
     </div>
 
@@ -324,7 +393,29 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <Dialog open={customerDialog} onOpenChange={v => !saveCustomer.isPending && setCustomerDialog(v)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>إضافة عميل سريع</DialogTitle></DialogHeader><div className="space-y-3"><div><Label>الاسم *</Label><Input value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} /></div><div><Label>الهاتف</Label><Input value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value })} dir="ltr" /></div></div><DialogFooter><Button variant="outline" onClick={() => setCustomerDialog(false)} disabled={saveCustomer.isPending}>إلغاء</Button><Button onClick={() => saveCustomer.mutate(customerForm)} disabled={saveCustomer.isPending || !customerForm.name.trim()}>{saveCustomer.isPending ? 'جارٍ الحفظ...' : 'حفظ العميل'}</Button></DialogFooter></DialogContent></Dialog>
 
     {/* Receipt after checkout */}
-    <Dialog open={!!printing} onOpenChange={v => { if (!v) { setPrinting(null); setPrintingHistorical(false); window.setTimeout(() => barcodeRef.current?.focus(), 100) } }}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>{printingHistorical ? 'إعادة طباعة فاتورة' : 'الفاتورة تمت بنجاح'}</DialogTitle></DialogHeader>{printing && <div id="printable-invoice" className="rounded-xl border bg-white p-4 text-black"><div className="text-center text-xl font-black">طيبة</div><div className="mt-2 text-sm">فاتورة: {printing.invoiceNo}</div><div className="text-sm">التاريخ: {formatDateTime(printing.date)}</div>{printing.items.map(i => <div key={i.id} className="flex justify-between border-b py-2 text-sm"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="mt-3 flex justify-between font-black"><span>الإجمالي</span><span>{money(printing.total)}</span></div></div>}<div className="grid grid-cols-2 gap-2"><Button onClick={() => window.print()}><Printer className="size-4" /> طباعة</Button><Button variant="outline" onClick={() => printing && shareReceipt(printing)}><Share2 className="size-4" /> مشاركة</Button></div><Button className="w-full" onClick={() => { setPrinting(null); setPrintingHistorical(false); window.setTimeout(() => barcodeRef.current?.focus(), 100) }}><CheckCircle2 className="size-4" /> {printingHistorical ? 'إغلاق' : 'فاتورة جديدة'}</Button></DialogContent></Dialog>
+    <Dialog open={!!printing} onOpenChange={v => { if (!v) { setPrinting(null); setPrintingHistorical(false); window.setTimeout(() => searchRef.current?.focus(), 100) } }}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>{printingHistorical ? 'إعادة طباعة فاتورة' : 'الفاتورة تمت بنجاح'}</DialogTitle></DialogHeader>{printing && <div id="printable-invoice" className="rounded-xl border bg-white p-3 text-black">
+      <div className="text-center text-lg font-black">طيبة</div>
+      <div className="text-center text-[10px]">إيصال بيع</div>
+      <div className="my-2 border-t border-dashed border-black" />
+      <div className="flex justify-between gap-2 text-xs"><span>رقم الفاتورة</span><b dir="ltr">{printing.invoiceNo}</b></div>
+      <div className="mt-1 flex justify-between gap-2 text-xs"><span>التاريخ</span><span>{formatDateTime(printing.date)}</span></div>
+      {printing.customer?.name && <div className="mt-1 flex justify-between gap-2 text-xs"><span>العميل</span><span className="max-w-[48mm] break-words text-left">{printing.customer.name}</span></div>}
+      <div className="my-2 border-t border-dashed border-black" />
+      <div className="space-y-1.5">{printing.items.map(i => <div key={i.id} className="border-b border-dashed border-neutral-400 pb-1.5">
+        <div className="break-words text-xs font-semibold">{i.variant?.product?.name || 'صنف'}{i.variant?.size ? ' · ' + i.variant.size : ''}{i.variant?.color ? ' · ' + i.variant.color : ''}</div>
+        <div className="mt-0.5 flex justify-between gap-2 text-xs"><span>الكمية: {i.quantity}</span><b>{money(i.total)}</b></div>
+      </div>)}</div>
+      {Number(printing.subtotal) > 0 && <div className="mt-2 flex justify-between gap-2 text-xs"><span>قبل الخصم</span><span>{money(Number(printing.subtotal))}</span></div>}
+      {Number(printing.discount) > 0 && <div className="mt-1 flex justify-between gap-2 text-xs"><span>الخصم</span><span>-{money(Number(printing.discount))}</span></div>}
+      {Number(printing.taxAmount) > 0 && <div className="mt-1 flex justify-between gap-2 text-xs"><span>الضريبة</span><span>{money(Number(printing.taxAmount))}</span></div>}
+      <div className="my-2 border-t border-dashed border-black" />
+      <div className="flex justify-between gap-2 text-sm font-black"><span>الإجمالي</span><span>{money(printing.total)}</span></div>
+      <div className="mt-1 flex justify-between gap-2 text-xs"><span>طريقة الدفع</span><span>{({ cash: 'نقدي', card: 'بطاقة', transfer: 'تحويل', credit: 'آجل' } as Record<string, string>)[printing.paymentMethod] || printing.paymentMethod}</span></div>
+      <div className="mt-1 flex justify-between gap-2 text-xs"><span>المدفوع</span><span>{money(printing.paid)}</span></div>
+      {printing.change > 0 && <div className="mt-1 flex justify-between gap-2 text-xs"><span>الباقي للعميل</span><span>{money(printing.change)}</span></div>}
+      <div className="my-2 border-t border-dashed border-black" />
+      <div className="text-center text-xs">شكرًا لزيارتكم</div>
+    </div>}<p className="no-print text-xs text-muted-foreground">ستفتح نافذة الطباعة الخاصة بالنظام؛ اختر طابعة الإيصالات ومقاس الورق الصحيح (58 أو 80 مم).</p><div className="no-print grid grid-cols-2 gap-2"><Button onClick={() => window.print()}><Printer className="size-4" /> طباعة</Button><Button variant="outline" onClick={() => printing && shareReceipt(printing)}><Share2 className="size-4" /> مشاركة</Button></div><Button className="w-full" onClick={() => { setPrinting(null); setPrintingHistorical(false); window.setTimeout(() => searchRef.current?.focus(), 100) }}><CheckCircle2 className="size-4" /> {printingHistorical ? 'إغلاق' : 'فاتورة جديدة'}</Button></DialogContent></Dialog>
 
     {/* History */}
     <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-h-[90dvh] overflow-y-auto rounded-3xl sm:max-w-2xl"><DialogHeader><DialogTitle>سجل الفواتير</DialogTitle></DialogHeader>{salesQuery.isLoading ? <Skeleton className="h-24" /> : salesQuery.isError ? <div className="flex flex-col items-center gap-3 py-8 text-center"><p className="text-sm text-destructive">تعذر تحميل سجل الفواتير.</p><Button variant="outline" onClick={() => void salesQuery.refetch()}>إعادة المحاولة</Button></div> : sales.length === 0 ? <div className="py-8 text-center text-sm text-muted-foreground">لا توجد فواتير مسجلة حتى الآن.</div> : <div className="space-y-2">{sales.map(s => <div key={s.id} className="rounded-xl border p-3"><div className="flex justify-between"><b>{s.invoiceNo}</b><Badge variant={saleStatusBadgeVariant(s.status)}>{saleStatusLabel(s.status)}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{formatDateTime(s.date)} · {s.customer?.name || 'عميل نقدي'}</div><div className="mt-2 flex justify-between"><b>{money(s.total)}</b><Button size="sm" variant="outline" onClick={() => setViewing(s)}><Eye className="size-4" /> عرض</Button></div></div>)}</div>}</DialogContent></Dialog>

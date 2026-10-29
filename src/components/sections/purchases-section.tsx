@@ -66,7 +66,7 @@ export function PurchasesSection() {
   const [moneyEditor, setMoneyEditor] = useState<'discount'|'paid'|'price'|'qty'|null>(null)
   const [editingLine, setEditingLine] = useState<number | null>(null)
 
-  const { data: purchasesData, isLoading, isError: purchasesError, refetch: refetchPurchases } = useQuery<{ items: Purchase[] }>({ queryKey: ['purchases'], queryFn: async () => { const r = await fetch('/api/purchases?pageSize=100'); if (!r.ok) throw new Error('تعذر تحميل فواتير الشراء'); return r.json() } })
+  const { data: purchasesData, isLoading, isError: purchasesError, refetch: refetchPurchases } = useQuery<{ items: Purchase[] }>({ queryKey: ['purchases', search.trim()], queryFn: async () => { const r = await fetch('/api/purchases?pageSize=100&search=' + encodeURIComponent(search.trim())); if (!r.ok) throw new Error('تعذر تحميل فواتير الشراء'); return r.json() } })
   const purchases = purchasesData?.items || []
   const { data: productsData, isError: purchaseProductsError, refetch: refetchProductsForPurchases } = useQuery<{ items: { id: string; name: string; variants: Variant[] }[] }>({ queryKey: ['products-for-purchases'], queryFn: async () => { const r = await fetch('/api/products?pageSize=500'); if (!r.ok) throw new Error('تعذر تحميل المنتجات للمشتريات'); return r.json() } })
   const { data: suppliers = [], isError: purchaseSuppliersError, refetch: refetchPurchaseSuppliers } = useQuery<Supplier[]>({ queryKey: ['suppliers'], queryFn: async () => { const r = await fetch('/api/suppliers'); if (!r.ok) throw new Error('تعذر تحميل الموردين'); return r.json() } })
