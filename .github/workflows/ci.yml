@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - local-only-hardening
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
   workflow_dispatch:
 
 concurrency:
