@@ -24,6 +24,7 @@ test('malformed Origin is rejected for writes', () => {
   assert.equal(isUnsafeCrossOriginRequest(request('DELETE', 'http://127.0.0.1:3000/api/products/1', { origin: 'not a URL' })), true)
 })
 
-test('origin-less non-browser clients are still supported', () => {
-  assert.equal(isUnsafeCrossOriginRequest(request('POST', 'http://127.0.0.1:3000/api/sales')), false)
+test('origin-less writes fail closed unless same-origin browser metadata is present', () => {
+  assert.equal(isUnsafeCrossOriginRequest(request('POST', 'http://127.0.0.1:3000/api/sales')), true)
+  assert.equal(isUnsafeCrossOriginRequest(request('POST', 'http://127.0.0.1:3000/api/sales', { 'sec-fetch-site': 'same-origin' })), false)
 })
