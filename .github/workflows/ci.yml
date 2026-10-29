@@ -1,9 +1,11 @@
 name: Local POS quality checks
 
 on:
+  # Validate feature branches through pull_request only; also validate main after merge.
+  # Avoid duplicate push + pull_request runs cancelling each other for the same commit.
   push:
     branches:
-      - local-only-hardening
+      - main
   pull_request:
     branches:
       - main
@@ -11,7 +13,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: tayba-pos-local-hardening-checks
+  group: tayba-pos-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
