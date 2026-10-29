@@ -14,7 +14,7 @@ export async function GET() {
   const settings = await getAllSettings()
   // Retired third-party integration settings are not part of the local app.
   for (const key of Object.keys(settings)) {
-    if (/^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync|mustChangePw:|managerPin$)/i.test(key)) delete settings[key]
+    if (/^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync|mustChangePw:|managerPin$|saleCounter$|purchaseCounter$|returnCounter$|purchaseReturnCounter$)/i.test(key)) delete settings[key]
   }
   return NextResponse.json(settings)
 }
@@ -30,7 +30,7 @@ export async function POST(req: NextRequest) {
     if (!settings || typeof settings !== 'object') {
       return NextResponse.json({ error: 'بيانات غير صحيحة' }, { status: 400 })
     }
-    if (Object.keys(settings).some((key) => /^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync|mustChangePw:|managerPin$)/i.test(key))) {
+    if (Object.keys(settings).some((key) => /^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync|mustChangePw:|managerPin$|saleCounter$|purchaseCounter$|returnCounter$|purchaseReturnCounter$)/i.test(key))) {
       return NextResponse.json({ error: 'إعدادات المزامنة الخارجية غير متاحة في النسخة المحلية' }, { status: 400 })
     }
     const cleaned: Record<string, string> = {}
