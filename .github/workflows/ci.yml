@@ -43,6 +43,8 @@ jobs:
         env:
           ALLOW_TAYBA_SETUP_TEST: "1"
         run: node --test tests/safe-db-setup.test.mjs
+      - name: Test same-origin API write protection
+        run: node --experimental-strip-types --test tests/request-origin.test.ts
       - name: TypeScript check
         run: npx tsc --noEmit
       - name: Lint
