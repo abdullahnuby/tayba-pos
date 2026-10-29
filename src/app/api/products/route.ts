@@ -6,7 +6,7 @@ import { getCurrentUser } from '@/lib/auth'
 // Zod schemas — strict validation
 const variantSchema = z.object({
   id: z.string().optional(),
-  sku: z.string().min(1),
+  sku: z.string().trim().min(1),
   barcode: z.string().optional().nullable(),
   size: z.string().optional().nullable(),
   color: z.string().optional().nullable(),
@@ -115,7 +115,7 @@ export async function POST(req: NextRequest) {
     const { variants, ...productData } = parsed.data
 
     // Validate SKU uniqueness
-    const skus = variants.map((v) => v.sku)
+    const skus = variants.map((v) => v.sku.trim())
     if (new Set(skus).size !== skus.length) {
       return NextResponse.json({ error: 'SKUs مكررة في نفس المنتج' }, { status: 400 })
     }
@@ -158,7 +158,7 @@ export async function POST(req: NextRequest) {
         description: productData.description || null,
         variants: {
           create: variants.map((v) => ({
-            sku: v.sku,
+            sku: v.sku.trim(),
             barcode: v.barcode?.trim() || null,
             size: v.size || null,
             color: v.color || null,

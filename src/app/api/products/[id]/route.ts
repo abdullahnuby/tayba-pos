@@ -14,7 +14,7 @@ const patchSchema = z.object({
   image: z.string().optional().nullable(),
   variants: z.array(z.object({
     id: z.string().optional(),
-    sku: z.string().min(1),
+    sku: z.string().trim().min(1),
     barcode: z.string().optional().nullable(),
     size: z.string().optional().nullable(),
     color: z.string().optional().nullable(),
@@ -143,7 +143,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
       for (const v of variants) {
         const data = {
-          sku: v.sku,
+          sku: v.sku.trim(),
           barcode: v.barcode?.trim() || null,
           size: v.size || null,
           color: v.color || null,
