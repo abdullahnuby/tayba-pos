@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { getCurrentUser, verifyPassword, hashPassword, validatePasswordPolicy, clearMustChangePassword } from '@/lib/auth'
+import { getCurrentUser, verifyPassword, verifyPin, hashPassword, validatePasswordPolicy, clearMustChangePassword } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { z } from 'zod'
@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
     const limited = applyRateLimit(req, 'password-change', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
     if (limited) return limited
 
-    const user = await getCurrentUser()
+    const user = await getCurrentUser({ allowMustChangePassword: true })
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
 
     const body = await req.json()
@@ -27,8 +27,11 @@ export async function POST(req: NextRequest) {
 
     const dbUser = await db.user.findUnique({ where: { id: user.id } })
     if (!dbUser) return NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-    if (!verifyPassword(currentPassword, dbUser.passwordHash)) {
-      return NextResponse.json({ error: 'كلمة المرور الحالية غير صحيحة' }, { status: 400 })
+    const currentCredentialValid = dbUser.passwordHash
+      ? verifyPassword(currentPassword, dbUser.passwordHash)
+      : Boolean(user.mustChangePassword && dbUser.pinHash && verifyPin(currentPassword, dbUser.pinHash))
+    if (!currentCredentialValid) {
+      return NextResponse.json({ error: 'كلمة المرور الحالية أو رقم PIN القديم غير صحيح' }, { status: 400 })
     }
 
     // Enforce password policy on new password
