@@ -13,7 +13,9 @@ export function isUnsafeCrossOriginRequest(request: Pick<Request, 'method' | 'ur
   if (fetchSite === 'cross-site') return true
 
   const origin = request.headers.get('origin')
-  if (!origin) return false
+  // Fail closed for origin-less writes unless browser metadata proves the
+  // request came from this exact origin. This application has no public API.
+  if (!origin) return fetchSite !== 'same-origin'
 
   try {
     return new URL(origin).origin !== new URL(request.url).origin
