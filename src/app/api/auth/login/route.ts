@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
-import { verifyPassword, verifyPin, flagMustChangePassword, createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE } from '@/lib/auth'
+import { verifyPassword, verifyPin, flagMustChangePassword, createSessionToken, getSessionEpoch, SESSION_COOKIE_NAME, SESSION_MAX_AGE } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 import { applyRateLimit, RATE_LIMITS, getClientIpFromHeaders } from '@/lib/rate-limit'
 
@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
       role: user.role as 'admin' | 'manager' | 'cashier',
       mustChangePassword,
     }
-    const token = createSessionToken(sessionUser)
+    const token = createSessionToken(sessionUser, await getSessionEpoch(user.id))
     const clientIp = getClientIpFromHeaders(req.headers)
     await auditLog({ user: sessionUser, action: 'login', entity: 'user', entityId: user.id, ip: clientIp === 'local' ? undefined : clientIp })
     const res = NextResponse.json(sessionUser)
