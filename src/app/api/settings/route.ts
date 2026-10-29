@@ -11,7 +11,7 @@ export async function GET(req: NextRequest) {
   for (const s of settings) obj[s.key] = s.value
   // Do not expose retired third-party integration settings to the client.
   for (const key of Object.keys(obj)) {
-    if (/^(google|appsScript|autoSyncEnabled|lastGoogle)/i.test(key)) delete obj[key]
+    if (/^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync|mustChangePw:)/i.test(key)) delete obj[key]
   }
   return NextResponse.json(obj)
 }
@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
       return NextResponse.json({ error: 'بيانات الإعدادات غير صحيحة' }, { status: 400 })
     }
-    const forbidden = Object.keys(settings).find((key) => /^(google|appsScript|autoSyncEnabled|lastGoogle)/i.test(key))
+    const forbidden = Object.keys(settings).find((key) => /^(google|appsScript|autoSyncEnabled|lastGoogle|lastArchive|lastRestore|sync|mustChangePw:)/i.test(key))
     if (forbidden) {
       return NextResponse.json({ error: 'إعدادات المزامنة الخارجية غير متاحة في النسخة المحلية' }, { status: 400 })
     }
