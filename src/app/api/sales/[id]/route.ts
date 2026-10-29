@@ -56,7 +56,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     if (body.action === 'resume') {
       if (sale.status !== 'draft') return NextResponse.json({ error: 'يمكن استئناف الفواتير المسودة فقط' }, { status: 400 })
-      const updated = await atomicAction('resume_sale', { payload: { saleId: id } })
+      const updated = await atomicAction('resume_sale', {
+        payload: {
+          saleId: id,
+          userId: user.id,
+          requiresOpenShift: user.role === 'cashier',
+        },
+      })
       await auditLog({ user, action: 'update', entity: 'sale', entityId: id, before: { status: 'draft' }, after: { status: 'completed' } })
       return NextResponse.json(updated)
     }
