@@ -120,6 +120,14 @@ export async function localAtomicAction<T = any>(
   switch (action) {
     case 'commit_sale': {
       return database.$transaction(async (tx) => {
+        if (input.requiresOpenShift) {
+          const openShift = await tx.registerSession.findFirst({
+            where: { userId: String(input.userId || ''), status: 'open' },
+            select: { id: true },
+          })
+          if (!openShift) throw new Error('الوردية اتقفلت قبل تسجيل الفاتورة؛ افتح وردية جديدة وحاول مرة أخرى')
+        }
+
         const items = Array.isArray(input.items) ? input.items : []
         if (!items.length) throw new Error('الفاتورة يجب أن تحتوي على منتج واحد على الأقل')
 
@@ -639,6 +647,14 @@ export async function localAtomicAction<T = any>(
 
     case 'resume_sale': {
       return database.$transaction(async (tx) => {
+        if (input.requiresOpenShift) {
+          const openShift = await tx.registerSession.findFirst({
+            where: { userId: String(input.userId || ''), status: 'open' },
+            select: { id: true },
+          })
+          if (!openShift) throw new Error('الوردية اتقفلت قبل استئناف الفاتورة؛ افتح وردية جديدة وحاول مرة أخرى')
+        }
+
         const sale = await tx.sale.findUnique({ where: { id: String(input.saleId || '') }, include: { items: true } })
         if (!sale) throw new Error('الفاتورة غير موجودة')
         if (sale.status !== 'draft') throw new Error('يمكن استئناف الفواتير المسودة فقط')
