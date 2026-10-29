@@ -3,6 +3,7 @@ import { db } from '@/lib/db'
 import { z } from 'zod'
 import { getCurrentUser, verifyPin } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 const pinField = z.string().regex(/^[0-9]{2,6}$/, 'الرقم السري غير صحيح')
 const openSchema = z.object({ openingFloat: z.number().min(0), pin: pinField, notes: z.string().optional().nullable() })
@@ -104,6 +105,8 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const limited = applyRateLimit(req, 'register-pin', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
+  if (limited) return limited
   try {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
@@ -129,6 +132,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function PATCH(req: NextRequest) {
+  const limited = applyRateLimit(req, 'register-pin', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
+  if (limited) return limited
   try {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
