@@ -809,7 +809,7 @@ test('sale cash refund uses current account balance after an unallocated custome
       idempotencyKey: 'ci-return-after-unallocated-customer-payment',
     },
   })
-  await db.customer.update({ where: { id: customerId }, data: { balance: { decrement: 10 } } })
+  await db.customer.update({ where: { id: returnCustomer.id }, data: { balance: { decrement: 10 } } })
   await db.customerPayment.create({
     data: {
       customerId: returnCustomer.id,
@@ -828,7 +828,7 @@ test('sale cash refund uses current account balance after an unallocated custome
     },
   })
   assert.equal(returned.refundAmount, 10)
-  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: customerId } })).balance, 0)
+  assert.equal((await db.customer.findUniqueOrThrow({ where: { id: returnCustomer.id } })).balance, 0)
 })
 
 test('voiding a sale is blocked when customer collections are not allocated to invoices', async () => {
