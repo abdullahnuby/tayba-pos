@@ -1,5 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
+import { createHmac } from 'node:crypto'
 import { createSessionToken, verifySessionToken, type SessionUser } from '../src/lib/auth.ts'
 
 test('signed sessions carry the per-user epoch and reject tampering', () => {
@@ -45,7 +46,6 @@ test('tokens missing a session epoch are rejected to invalidate legacy cookies',
     assert.ok(body)
     const payload = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'))
     delete payload.sessionEpoch
-    const { createHmac } = await import('node:crypto')
     const legacyBody = Buffer.from(JSON.stringify(payload)).toString('base64url')
     const signature = createHmac('sha256', process.env.AUTH_SECRET).update(legacyBody).digest('base64url')
     assert.equal(verifySessionToken(`${legacyBody}.${signature}`), null)
