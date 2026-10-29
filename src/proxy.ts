@@ -31,6 +31,15 @@ export function proxy(req: NextRequest) {
     }
   }
 
+  if (isApi && !unsafeWrite) {
+    const limited = applyRateLimit(req, 'proxy-api-read', RATE_LIMITS.api_general.max, RATE_LIMITS.api_general.window)
+    if (limited) {
+      limited.headers.set('Cache-Control', 'no-store')
+      limited.headers.set('X-Content-Type-Options', 'nosniff')
+      return limited
+    }
+  }
+
   const response = NextResponse.next()
   response.headers.set('X-Content-Type-Options', 'nosniff')
   response.headers.set('X-Frame-Options', 'DENY')
