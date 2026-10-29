@@ -481,23 +481,14 @@ export async function getClientIp(): Promise<string | null> {
 // Manager PIN
 // -----------------------------------------------------
 
-export async function verifyManagerPin(
-  pin: string
-): Promise<boolean> {
-  if (!pin) {
-    return false
-  }
+export async function verifyManagerPin(pin: string): Promise<boolean> {
+  if (!pin) return false
 
   try {
     const row = await db.setting.findUnique({ where: { key: 'managerPin' } })
-    if (row?.value && verifyPassword(pin, row.value)) return true
-
-    // Legacy local accounts store PIN hashes per user rather than in a global setting.
-    const privilegedUsers = await db.user.findMany({
-      where: { active: true, role: { in: ['admin', 'manager'] }, pinHash: { not: null } },
-      select: { pinHash: true },
-    })
-    return privilegedUsers.some((user) => Boolean(user.pinHash && verifyPin(pin, user.pinHash)))
+    // Only a dedicated global manager-approval credential is accepted here.
+    // A user's shift PIN must never authorize discounted sales.
+    return Boolean(row?.value && verifyPassword(pin, row.value))
   } catch {
     return false
   }
