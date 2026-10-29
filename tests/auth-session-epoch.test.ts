@@ -3,6 +3,9 @@ import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
 import { createSessionToken, verifySessionToken, type SessionUser } from '../src/lib/session-token.ts'
 
+// Test-only secret (44 chars); never used by the application runtime.
+const TEST_SECRET = 'ci-only-session-secret-at-least-32-chars-long'
+
 test('signed sessions carry the per-user epoch and reject tampering', () => {
   const previous = process.env.AUTH_SECRET
   process.env.AUTH_SECRET = TEST_SECRET
