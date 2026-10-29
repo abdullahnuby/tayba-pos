@@ -130,6 +130,23 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const barcodes = variants.map((v) => v.barcode?.trim() || '').filter(Boolean)
+    if (new Set(barcodes).size !== barcodes.length) {
+      return NextResponse.json({ error: 'باركود مكرر داخل المنتج' }, { status: 400 })
+    }
+    if (barcodes.length > 0) {
+      const existingBarcodes = await db.productVariant.findMany({
+        where: { barcode: { in: barcodes } },
+        select: { barcode: true },
+      })
+      if (existingBarcodes.length > 0) {
+        return NextResponse.json(
+          { error: `باركود مستخدم مسبقًا: ${existingBarcodes.map((item) => item.barcode).filter(Boolean).join(', ')}` },
+          { status: 400 }
+        )
+      }
+    }
+
     const product = await db.product.create({
       data: {
         ...productData,
@@ -142,7 +159,7 @@ export async function POST(req: NextRequest) {
         variants: {
           create: variants.map((v) => ({
             sku: v.sku,
-            barcode: v.barcode || null,
+            barcode: v.barcode?.trim() || null,
             size: v.size || null,
             color: v.color || null,
             material: v.material || null,

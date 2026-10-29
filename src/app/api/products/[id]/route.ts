@@ -66,8 +66,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     // If variants provided, replace them entirely (delete + create)
     if (variants) {
-      // Validate SKU uniqueness against existing variants of OTHER products
-      const skus = variants.map((v) => v.sku)
+      // Validate unique SKUs both within the submitted list and across other products.
+      const skus = variants.map((v) => v.sku.trim())
+      if (new Set(skus).size !== skus.length) {
+        return NextResponse.json({ error: 'SKUs مكررة في نفس المنتج' }, { status: 400 })
+      }
       const conflicts = await db.productVariant.findMany({
         where: { sku: { in: skus }, productId: { not: id } },
         select: { sku: true },
@@ -77,6 +80,23 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           { error: `SKU مكرر لمنتج آخر: ${conflicts.map((c) => c.sku).join(', ')}` },
           { status: 400 }
         )
+      }
+
+      const barcodes = variants.map((v) => v.barcode?.trim() || '').filter(Boolean)
+      if (new Set(barcodes).size !== barcodes.length) {
+        return NextResponse.json({ error: 'باركود مكرر داخل المنتج' }, { status: 400 })
+      }
+      if (barcodes.length > 0) {
+        const barcodeConflicts = await db.productVariant.findMany({
+          where: { barcode: { in: barcodes }, productId: { not: id } },
+          select: { barcode: true },
+        })
+        if (barcodeConflicts.length > 0) {
+          return NextResponse.json(
+            { error: `باركود مستخدم في منتج آخر: ${barcodeConflicts.map((item) => item.barcode).filter(Boolean).join(', ')}` },
+            { status: 400 }
+          )
+        }
       }
     }
 
@@ -124,7 +144,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       for (const v of variants) {
         const data = {
           sku: v.sku,
-          barcode: v.barcode || null,
+          barcode: v.barcode?.trim() || null,
           size: v.size || null,
           color: v.color || null,
           material: v.material || null,
