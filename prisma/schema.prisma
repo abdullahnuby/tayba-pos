@@ -20,7 +20,7 @@ datasource db {
 model User {
   id           String   @id @default(cuid())
   username     String   @unique
-  passwordHash String
+  passwordHash String?
   pinHash      String?
   name         String
   role         String   @default("cashier") // 'admin' | 'manager' | 'cashier'
