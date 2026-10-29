@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { db } from '@/lib/db'
-import { getCurrentUser, verifyPassword, verifyPin, hashPassword, validatePasswordPolicy, clearMustChangePassword, rotateSessionEpoch, createSessionToken, getSessionEpoch, SESSION_COOKIE_NAME, SESSION_MAX_AGE, type SessionUser } from '@/lib/auth'
+import { getCurrentUser, verifyPassword, verifyPin, hashPassword, validatePasswordPolicy, createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE, type SessionUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { z } from 'zod'
@@ -43,13 +44,21 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'كلمة المرور الجديدة يجب أن تكون مختلفة' }, { status: 400 })
     }
 
-    const updatedUser = await db.user.update({
-      where: { id: user.id },
-      data: { passwordHash: hashPassword(newPassword) },
-      select: { id: true, username: true, name: true, role: true },
+    const nextEpoch = randomUUID()
+    const updatedUser = await db.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: user.id },
+        data: { passwordHash: hashPassword(newPassword) },
+        select: { id: true, username: true, name: true, role: true },
+      })
+      await tx.setting.deleteMany({ where: { key: `mustChangePw:${user.id}` } })
+      await tx.setting.upsert({
+        where: { key: `sessionEpoch:${user.id}` },
+        create: { key: `sessionEpoch:${user.id}`, value: nextEpoch },
+        update: { value: nextEpoch },
+      })
+      return updated
     })
-    await clearMustChangePassword(user.id)
-    await rotateSessionEpoch(user.id)
 
     const refreshedUser: SessionUser = {
       id: updatedUser.id,
@@ -57,7 +66,7 @@ export async function POST(req: NextRequest) {
       name: updatedUser.name,
       role: updatedUser.role as SessionUser['role'],
     }
-    const refreshedToken = createSessionToken(refreshedUser, await getSessionEpoch(user.id))
+    const refreshedToken = createSessionToken(refreshedUser, nextEpoch)
 
     await auditLog({ user, action: 'password_change', entity: 'user', entityId: user.id })
 
