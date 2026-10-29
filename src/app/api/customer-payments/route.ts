@@ -34,6 +34,7 @@ export async function POST(req: NextRequest) {
   try {
     const user = await getCurrentUser()
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+    if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية تسجيل تحصيلات العملاء' }, { status: 403 })
     const body = await req.json()
     const parsed = paymentSchema.safeParse(body)
     if (!parsed.success) {
