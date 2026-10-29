@@ -51,6 +51,8 @@ jobs:
         run: node --experimental-strip-types --test tests/request-origin.test.ts
       - name: Test rate-limit client identity
         run: node --experimental-strip-types --test tests/rate-limit.test.ts
+      - name: Test session epoch and token integrity
+        run: node --experimental-strip-types --test tests/auth-session-epoch.test.ts
       - name: Test legacy SQLite import into an isolated target
         run: node --test tests/legacy-import.test.mjs
       - name: TypeScript check
