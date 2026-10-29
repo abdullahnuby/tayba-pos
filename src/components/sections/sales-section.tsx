@@ -32,7 +32,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const searchRef = useRef<HTMLInputElement>(null)
   const scannerBufferRef = useRef('')
   const scannerLastKeyAtRef = useRef(0)
-  const scannerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const scannerTimerRef = useRef<number | null>(null)
   const scannerActionRef = useRef<((code: string, notifyUnknown?: boolean) => boolean) | null>(null)
   const scannerEnabledRef = useRef(true)
   const [search, setSearch] = useState('')
