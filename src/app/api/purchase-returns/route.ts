@@ -6,7 +6,7 @@ import { auditLog } from '@/lib/audit'
 
 const itemSchema = z.object({ purchaseItemId: z.string().min(1), quantity: z.number().int().positive() })
 const schema = z.object({
-  idempotencyKey: z.string().min(8).max(200).optional(),
+  idempotencyKey: z.string().min(8).max(120).optional(),
   purchaseId: z.string().min(1),
   supplierId: z.string().optional(),
   reason: z.string().optional().nullable(),
@@ -19,6 +19,7 @@ const schema = z.object({
 export async function GET(req: NextRequest) {
   const user = await getCurrentUser()
   if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية مرتجعات الشراء' }, { status: 403 })
   const purchaseId = new URL(req.url).searchParams.get('purchaseId')
   const returns = await db.purchaseReturn.findMany({
     where: purchaseId ? { purchaseId } : {},
@@ -35,7 +36,11 @@ export async function POST(req: NextRequest) {
     if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية مرتجعات الشراء' }, { status: 403 })
     const parsed = schema.safeParse(await req.json())
     if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
-    const data = { ...parsed.data, idempotencyKey: parsed.data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined }
+    const rawIdempotencyKey = parsed.data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 120)) {
+      return NextResponse.json({ error: 'مفتاح منع التكرار يجب أن يكون بين 8 و120 حرفًا' }, { status: 400 })
+    }
+    const data = { ...parsed.data, idempotencyKey: rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined }
     const result = await atomicAction<any>('commit_purchase_return', { payload: { ...data, userId: user.id } })
     await auditLog({ user, action: 'return', entity: 'purchase', entityId: data.purchaseId, after: { returnNo: result.returnNo, total: result.total, refundMethod: result.refundMethod } })
     return NextResponse.json(result, { status: 201 })

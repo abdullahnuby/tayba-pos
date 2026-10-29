@@ -66,29 +66,31 @@ export async function POST(req: NextRequest) {
       ['loyaltyEnabled', 'true'],
       ['loyaltyRate', '0.01'],
       ['receiptFooter', 'شكراً لزيارتكم'],
-      ['autoSyncEnabled', 'true'],
     ] as const
 
-    // Cloudflare D1 doesn't support interactive transactions — build every
-    // operation up front (user create + each setting upsert) and run them
-    // together as one batch transaction.
-    const [admin] = await db.$transaction([
-      db.user.create({
+    // Recheck inside the write transaction so two simultaneous first-run requests
+    // cannot both create an administrator.
+    const admin = await db.$transaction(async (tx) => {
+      if (await tx.user.count() > 0) {
+        throw new Error('SETUP_ALREADY_DONE')
+      }
+      const created = await tx.user.create({
         data: {
           username: data.username,
           passwordHash: hashPassword(data.password),
           name: data.name,
           role: 'admin',
         },
-      }),
-      ...settings.map(([key, value]) =>
-        db.setting.upsert({
+      })
+      for (const [key, value] of settings) {
+        await tx.setting.upsert({
           where: { key },
           update: { value },
           create: { key, value },
         })
-      ),
-    ])
+      }
+      return created
+    })
 
     const result = admin
 
@@ -111,9 +113,12 @@ export async function POST(req: NextRequest) {
       { status: 201 }
     )
   } catch (e: unknown) {
-    console.error('AUTH_SETUP_POST_ERROR', e)
-    const err = e as { message?: string; stack?: string }
-    return NextResponse.json({ ok: false, error: err.message || 'خطأ في الإعداد' }, { status: 500 })
+    const err = e as { message?: string }
+    if (err.message === 'SETUP_ALREADY_DONE') {
+      return NextResponse.json({ ok: false, error: 'النظام مُهيأ بالفعل. سجل دخول كـ admin لتعديل المستخدمين.' }, { status: 400 })
+    }
+    console.error('AUTH_SETUP_POST_ERROR', err.message)
+    return NextResponse.json({ ok: false, error: 'تعذر إكمال الإعداد. راجع البيانات وحاول مرة أخرى.' }, { status: 500 })
   }
 }
 

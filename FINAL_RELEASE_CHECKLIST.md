@@ -1,41 +1,48 @@
-# طيبة POS — Final Release Checklist
+# طيبة POS — قائمة قبول الإصدار المحلي
 
-This checklist is a release gate, not a claim that live verification has already happened.
+هذه بوابة إصدار. وجود البند هنا لا يعني أنه اجتاز الاختبار.
 
-## Business E2E
-- Admin login / cashier creation
-- Category / brand / product / variant creation
-- Purchase → stock → weighted cost → supplier balance
-- Open register → cash sale → cash ledger
-- Card / transfer sale → no cash drawer increase
-- Credit sale → customer ledger
-- Customer collection → customer ledger + cash ledger
-- Sale return → stock + customer/cash settlement
-- Purchase return → stock + supplier/cash settlement
-- Stock adjustment → stock ledger + audit
-- Close register → expected vs actual cash
-- Reports reconcile to ledgers
+## 1. البناء والجهاز المحلي
+- [ ] تثبيت نظيف على Windows باستخدام إصدار Node.js المدعوم.
+- [ ] إعداد `.env` و`AUTH_SECRET` فريد، ثم `npm install` و`npm run db:setup` و`npm run build`.
+- [ ] اجتياز Prisma validation وSQLite setup والاختبارات وTypeScript وESLint والبناء على أحدث SHA.
+- [ ] التحقق من أن التشغيل الافتراضي محلي ولا يحتاج Google Sheets أو Cloudflare أو اتصالًا خارجيًا لتسجيل البيع.
 
-## Security
-- Unauthenticated API matrix
-- Cashier/manager/admin authorization matrix
-- Idempotency lost-response test
-- Debug endpoints disabled in production
-- Production secrets explicitly configured
+## 2. المحاسبة والمخزون — قاعدة تجريبية فقط
+- [ ] تسجيل دخول المدير وإنشاء كاشير والتحقق من الصلاحيات.
+- [ ] إنشاء تصنيف ومنتج ومتغير له مقاس/لون وSKU/باركود.
+- [ ] شراء مخزون والتحقق من الكمية ومتوسط التكلفة ورصيد المورد.
+- [ ] فتح وردية ثم البيع نقدًا وبطاقة وتحويل وآجل، مع خصم وضريبة.
+- [ ] إرجاع بند جزئيًا ثم إرجاع الباقي والتحقق من الكمية والرصيد والمبلغ النقدي.
+- [ ] دفعة عميل ودفعة مورد وتسوية المخزون وإلغاء/استئناف المسودة عند دعم المسار.
+- [ ] إغلاق الوردية والتحقق من النقد المتوقع والفعلي.
+- [ ] مطابقة التقارير مع سجل الحركات.
 
-## Mobile POS
-- Barcode/search
-- Cart editing
-- Payment
-- Change calculation
-- Customer credit
-- Double-tap protection
-- Receipt result / print / share
+## 3. ماسح الباركود
+- [ ] اختبار ماسح USB Keyboard/HID حقيقي بعد تثبيت المنتج ورمزه في قاعدة الاختبار.
+- [ ] مسح الباركود مع إنهاء Enter/CR، ثم التحقق من إضافة المتغير الصحيح مرة واحدة.
+- [ ] تكرار مسح نفس الصنف لزيادة الكمية ضمن المخزون المتاح فقط.
+- [ ] اختبار SKU، والباركود غير المعروف، والقيم ذات المسافات الطرفية، والتركيز بعد الحفظ وبعد إغلاق الإيصال.
+- [ ] التأكد من أن المسح لا يكتب في حقول المبلغ أو الكمية، ولا يسبب عملية بيع مكررة.
 
-## Technical
-- Build
-- TypeScript
-- ESLint
-- Google Apps Script syntax
-- Final Google Sheets headers/schema
-- Historical reconciliation
+## 4. الطابعة والإيصال
+- [ ] اختيار الطابعة المثبتة من حوار الطباعة في نظام التشغيل.
+- [ ] اختبار عرض الورق المتاح فعليًا (مثل 58mm أو 80mm)، الهوامش، اتجاه RTL، الخط العربي، الأسماء الطويلة، وتعدد البنود.
+- [ ] التأكد من أن المعاينة والطباعة تحتويان الإيصال وحده دون القائمة أو النوافذ أو أزرار البرنامج.
+- [ ] إعادة طباعة فاتورة قديمة من سجل المبيعات.
+- [ ] إلغاء حوار الطباعة لا يغير أو يلغي الفاتورة المحفوظة.
+- [ ] اختبار فعلي للطابعة على جهاز المحل؛ نجاح `window.print()` وحده لا يثبت توافق التعريف أو مقاس الورق.
+
+## 5. الواجهة والصلاحيات
+- [ ] تجربة كل شاشة على هاتف 360/390px، التابلت، وسطح المكتب.
+- [ ] حالات التحميل والبيانات الفارغة والفشل وعدم الاتصال/تعذر API ورسائل النجاح.
+- [ ] منع النقر المزدوج أثناء الحفظ، والتأكد من رسائل أخطاء مفهومة.
+- [ ] التحقق من أن الكاشير لا يصل إلى وظائف الإدارة عبر عنوان API مباشر.
+- [ ] فحص الحوارات والنوافذ والتمرير وتركيز لوحة المفاتيح وإمكانية الوصول الأساسية.
+
+## 6. النسخ والاستعادة
+- [ ] إنشاء نسخة SQLite، التأكد من سلامتها، وفتحها كقاعدة مستقلة.
+- [ ] اختبار الاستعادة والترقية على نسخة منفصلة مع نسخة حماية قبل التعديل.
+- [ ] تجربة استيراد البيانات القديمة على قاعدة تجريبية ومقارنة الأعداد والإجماليات والأرصدة.
+- [ ] التأكد من عدم إضافة ملفات البيانات أو النسخ الاحتياطية أو أسرار التشغيل إلى Git.
+- [ ] كتابة خطوات الرجوع للنسخة الحالية قبل تثبيت أي إصدار جديد على جهاز المحل.

@@ -14,21 +14,28 @@ const purchaseItemSchema = z.object({
 })
 
 const purchaseSchema = z.object({
+  idempotencyKey: z.string().min(8).max(120).optional(),
   supplierId: z.string().min(1),
   date: z.string().optional(),
   discount: z.number().min(0).default(0),
   paid: z.number().min(0).default(0),
-  paymentMethod: z.string().default('cash'),
+  paymentMethod: z.enum(['cash', 'card', 'transfer', 'credit']).default('cash'),
   notes: z.string().optional().nullable(),
   status: z.enum(['draft', 'completed']).default('completed'),
   items: z.array(purchaseItemSchema).min(1, 'الفاتورة يجب أن تحتوي على بند واحد على الأقل'),
 })
 
 export async function GET(req: NextRequest) {
+  const user = await getCurrentUser()
+  if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
+  if (user.role === 'cashier') return NextResponse.json({ error: 'الكاشير لا يملك صلاحية عرض المشتريات' }, { status: 403 })
+
   const url = new URL(req.url)
   const search = url.searchParams.get('search') || ''
-  const page = Number(url.searchParams.get('page') || '1')
-  const pageSize = Number(url.searchParams.get('pageSize') || '50')
+  const rawPage = Number(url.searchParams.get('page') || '1')
+  const rawPageSize = Number(url.searchParams.get('pageSize') || '50')
+  const page = Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1)
+  const pageSize = Math.min(100, Math.max(1, Number.isFinite(rawPageSize) ? Math.floor(rawPageSize) : 50))
 
   const where = search ? {
     OR: [
@@ -65,6 +72,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: parsed.error.issues[0]?.message || 'بيانات غير صحيحة' }, { status: 400 })
     }
     const data = parsed.data
+    const rawIdempotencyKey = data.idempotencyKey || req.headers.get('Idempotency-Key') || undefined
+    if (rawIdempotencyKey && (rawIdempotencyKey.length < 8 || rawIdempotencyKey.length > 120)) {
+      return NextResponse.json({ error: 'مفتاح منع التكرار يجب أن يكون بين 8 و120 حرفًا' }, { status: 400 })
+    }
+    const idempotencyKey = rawIdempotencyKey ? `${user.id}:${rawIdempotencyKey}` : undefined
 
     // UI may submit commercial purchase units (e.g. 5 dozen).
     // Persist inventory in the base unit while keeping entered unit metadata.
@@ -86,9 +98,10 @@ export async function POST(req: NextRequest) {
       const baseQuantity = Math.round(enteredQuantity * factor)
       const enteredUnitCost = Number(i.unitCost)
       const baseUnitCost = enteredUnitCost / factor
-      return { ...i, quantity: baseQuantity, unitCost: baseUnitCost, enteredQuantity, unit: i.unit || v.purchaseUnit || 'piece', unitFactor: factor, lineTotal: enteredQuantity * enteredUnitCost }
+      const lineTotal = Math.round((enteredQuantity * enteredUnitCost + Number.EPSILON) * 100) / 100
+      return { ...i, quantity: baseQuantity, unitCost: baseUnitCost, enteredQuantity, unit: i.unit || v.purchaseUnit || 'piece', unitFactor: factor, lineTotal }
     })
-    const subtotal = normalizedItems.reduce((s, i) => s + i.lineTotal, 0)
+    const subtotal = Math.round((normalizedItems.reduce((sum, item) => sum + item.lineTotal, 0) + Number.EPSILON) * 100) / 100
     if (data.discount > subtotal) {
       return NextResponse.json(
         { error: `الخصم (${data.discount}) يتجاوز الإجمالي الفرعي (${subtotal})` },
@@ -112,6 +125,8 @@ export async function POST(req: NextRequest) {
     }>('commit_purchase', {
       payload: {
         supplierId: data.supplierId,
+        userId: user.id,
+        idempotencyKey,
         date: data.date || new Date().toISOString(),
         discount: data.discount,
         paid: data.paid,
@@ -130,16 +145,6 @@ export async function POST(req: NextRequest) {
     })
 
     await auditLog({ user, action: 'create', entity: 'purchase', entityId: purchase.id, after: { invoiceNo: purchase.invoiceNo, total: purchase.total } })
-
-    // Auto-sync to Google Sheets (best-effort, only if completed)
-    if (data.status === 'completed') {
-      try {
-        const { syncAfterPurchase } = await import('@/lib/sync')
-        await syncAfterPurchase(data.supplierId)
-      } catch (syncErr) {
-        console.error('Auto-sync failed (purchase):', syncErr)
-      }
-    }
 
     return NextResponse.json(purchase, { status: 201 })
   } catch (e: unknown) {

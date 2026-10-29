@@ -6,7 +6,7 @@ import { getCurrentUser } from '@/lib/auth'
 // Zod schemas — strict validation
 const variantSchema = z.object({
   id: z.string().optional(),
-  sku: z.string().min(1),
+  sku: z.string().trim().min(1),
   barcode: z.string().optional().nullable(),
   size: z.string().optional().nullable(),
   color: z.string().optional().nullable(),
@@ -44,8 +44,10 @@ export async function GET(req: NextRequest) {
   const url = new URL(req.url)
   const search = url.searchParams.get('search') || ''
   const categoryId = url.searchParams.get('categoryId')
-  const page = Number(url.searchParams.get('page') || '1')
-  const pageSize = Number(url.searchParams.get('pageSize') || '50')
+  const rawPage = Number(url.searchParams.get('page') || '1')
+  const rawPageSize = Number(url.searchParams.get('pageSize') || '50')
+  const page = Math.max(1, Number.isFinite(rawPage) ? Math.floor(rawPage) : 1)
+  const pageSize = Math.min(1000, Math.max(1, Number.isFinite(rawPageSize) ? Math.floor(rawPageSize) : 50))
 
   const where: {
     OR?: Array<{ name?: { contains: string }; description?: { contains: string }; variants?: { some: { sku?: { contains: string }; barcode?: { contains: string } } } }>
@@ -76,7 +78,23 @@ export async function GET(req: NextRequest) {
     db.product.count({ where }),
   ])
 
-  return NextResponse.json({ items: products, total, page, pageSize })
+  const items = user.role === 'cashier'
+    ? products.map((product) => ({
+        ...product,
+        variants: product.variants.map((variant) => {
+          const safeVariant: Record<string, unknown> = { ...variant }
+          delete safeVariant.costPrice
+          delete safeVariant.minQuantity
+          delete safeVariant.reorderQty
+          delete safeVariant.purchaseUnit
+          delete safeVariant.purchaseUnitFactor
+          delete safeVariant.baseUnit
+          return safeVariant
+        }),
+      }))
+    : products
+
+  return NextResponse.json({ items, total, page, pageSize }, { headers: { 'Cache-Control': 'no-store' } })
 }
 
 export async function POST(req: NextRequest) {
@@ -97,7 +115,7 @@ export async function POST(req: NextRequest) {
     const { variants, ...productData } = parsed.data
 
     // Validate SKU uniqueness
-    const skus = variants.map((v) => v.sku)
+    const skus = variants.map((v) => v.sku.trim())
     if (new Set(skus).size !== skus.length) {
       return NextResponse.json({ error: 'SKUs مكررة في نفس المنتج' }, { status: 400 })
     }
@@ -112,6 +130,23 @@ export async function POST(req: NextRequest) {
       )
     }
 
+    const barcodes = variants.map((v) => v.barcode?.trim() || '').filter(Boolean)
+    if (new Set(barcodes).size !== barcodes.length) {
+      return NextResponse.json({ error: 'باركود مكرر داخل المنتج' }, { status: 400 })
+    }
+    if (barcodes.length > 0) {
+      const existingBarcodes = await db.productVariant.findMany({
+        where: { barcode: { in: barcodes } },
+        select: { barcode: true },
+      })
+      if (existingBarcodes.length > 0) {
+        return NextResponse.json(
+          { error: `باركود مستخدم مسبقًا: ${existingBarcodes.map((item) => item.barcode).filter(Boolean).join(', ')}` },
+          { status: 400 }
+        )
+      }
+    }
+
     const product = await db.product.create({
       data: {
         ...productData,
@@ -123,8 +158,8 @@ export async function POST(req: NextRequest) {
         description: productData.description || null,
         variants: {
           create: variants.map((v) => ({
-            sku: v.sku,
-            barcode: v.barcode || null,
+            sku: v.sku.trim(),
+            barcode: v.barcode?.trim() || null,
             size: v.size || null,
             color: v.color || null,
             material: v.material || null,
@@ -146,14 +181,6 @@ export async function POST(req: NextRequest) {
       },
       include: { variants: true, category: true, brand: true },
     })
-
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterProduct } = await import('@/lib/sync')
-      await syncAfterProduct()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (product create):', syncErr)
-    }
 
     return NextResponse.json(product, { status: 201 })
   } catch (e: unknown) {

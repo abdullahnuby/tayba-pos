@@ -1,7 +1,8 @@
 'use client'
 
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
+import { clearIdempotencyKey, withIdempotencyKey } from '@/lib/client-idempotency'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -40,6 +41,7 @@ const empty = { name: '', phone: '', address: '', notes: '' }
 
 export function SuppliersSection() {
   const qc = useQueryClient()
+  const paymentKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const [dialogOpen, setDialogOpen] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [form, setForm] = useState(empty)
@@ -49,9 +51,9 @@ export function SuppliersSection() {
   const [statementEntity, setStatementEntity] = useState<Supplier | null>(null)
   const [search, setSearch] = useState('')
 
-  const { data: suppliers = [], isLoading } = useQuery<Supplier[]>({
+  const { data: suppliers = [], isLoading, isError, refetch } = useQuery<Supplier[]>({
     queryKey: ['suppliers'],
-    queryFn: async () => (await fetch('/api/suppliers')).json(),
+    queryFn: async () => { const response = await fetch('/api/suppliers'); if (!response.ok) throw new Error('تعذر تحميل الموردين'); return response.json() },
   })
 
   const filtered = suppliers.filter((s) =>
@@ -103,7 +105,7 @@ export function SuppliersSection() {
       const res = await fetch('/api/supplier-payments', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
+        body: JSON.stringify(withIdempotencyKey(data, paymentKeyRef)),
       })
       if (!res.ok) {
         const e = await res.json()
@@ -111,6 +113,7 @@ export function SuppliersSection() {
       }
     },
     onSuccess: () => {
+      clearIdempotencyKey(paymentKeyRef)
       qc.invalidateQueries({ queryKey: ['suppliers'] })
       qc.invalidateQueries({ queryKey: ['dashboard-stats'] })
       toast.success('تم تسجيل الدفعة وتحديث رصيد المورد')
@@ -165,6 +168,8 @@ export function SuppliersSection() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-44 w-full" />)}
         </div>
+      ) : isError ? (
+        <Card><CardContent className="flex flex-col items-center gap-3 py-10 text-center"><p className="text-sm text-destructive">تعذر تحميل قائمة الموردين.</p><Button variant="outline" onClick={() => void refetch()}>إعادة المحاولة</Button></CardContent></Card>
       ) : filtered.length === 0 ? (
         <EmptyState title="لا توجد موردين" description="أضف أول مورد" icon={Users} />
       ) : (

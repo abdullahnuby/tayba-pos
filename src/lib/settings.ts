@@ -3,8 +3,9 @@
  * Caches reads but supports an in-transaction variant.
  */
 import { db } from './db'
+import type { Prisma } from '@prisma/client'
 
-type Tx = Parameters<Parameters<typeof db['$transaction']>[0]>[0]
+type Tx = Prisma.TransactionClient
 
 const cache = new Map<string, string>()
 
@@ -70,7 +71,7 @@ export async function getAllSettings(): Promise<Record<string, string>> {
 
 /**
  * Atomic counter — MUST be called inside a transaction to be truly atomic.
- * Uses an Apps Script/Sheets upsert under the script write lock.
+ * Uses SQLite upsert inside the caller's Prisma transaction.
  * Returns the next invoice number with prefix.
  */
 export async function nextInvoiceNumber(

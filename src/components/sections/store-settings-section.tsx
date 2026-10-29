@@ -33,12 +33,44 @@ interface StoreSettings {
 
 export function StoreSettingsSection() {
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery<StoreSettings>({
+  const { data, isLoading, isError, refetch } = useQuery<StoreSettings>({
     queryKey: ['store-settings'],
-    queryFn: async () => (await fetch('/api/store-settings')).json(),
+    queryFn: async () => { const response = await fetch('/api/store-settings'); if (!response.ok) throw new Error('تعذر تحميل إعدادات المحل'); return response.json() },
   })
 
   const [form, setForm] = useState<Partial<StoreSettings>>({})
+
+  const [adminPassword, setAdminPassword] = useState('')
+  const [managerPin, setManagerPin] = useState('')
+  const managerPinStatus = useQuery<{ configured: boolean }>({
+    queryKey: ['manager-pin-status'],
+    queryFn: async () => {
+      const response = await fetch('/api/auth/manager-pin', { cache: 'no-store' })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'تعذر قراءة حالة PIN المدير')
+      return result
+    },
+  })
+  const managerPinMutation = useMutation({
+    mutationFn: async () => {
+      const response = await fetch('/api/auth/manager-pin', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        cache: 'no-store',
+        body: JSON.stringify({ currentPassword: adminPassword, pin: managerPin }),
+      })
+      const result = await response.json()
+      if (!response.ok) throw new Error(result.error || 'تعذر حفظ PIN المدير')
+      return result
+    },
+    onSuccess: () => {
+      setAdminPassword('')
+      setManagerPin('')
+      qc.invalidateQueries({ queryKey: ['manager-pin-status'] })
+      toast.success('تم تحديث PIN موافقة المدير بأمان')
+    },
+    onError: (error) => toast.error(error instanceof Error ? error.message : 'تعذر حفظ PIN المدير'),
+  })
 
   // Sync form with loaded settings
   if (data && Object.keys(form).length === 0) {
@@ -72,11 +104,17 @@ export function StoreSettingsSection() {
   }
 
   function update(key: keyof StoreSettings, value: string | boolean) {
-    setForm({ ...form, [key]: value })
+    setForm({ ...form, [key]: String(value) })
   }
 
-  if (isLoading || !form) {
-    return <div className="text-muted-foreground">جارٍ التحميل...</div>
+  if (isLoading && !data) {
+    return <div className="text-muted-foreground">جارٍ تحميل إعدادات المحل...</div>
+  }
+  if (isError && !data) {
+    return <Card><CardContent className="flex flex-col items-center gap-3 p-8 text-center"><p className="text-sm text-destructive">تعذر تحميل إعدادات المحل.</p><Button variant="outline" onClick={() => void refetch()}>إعادة المحاولة</Button></CardContent></Card>
+  }
+  if (!form) {
+    return <div className="text-muted-foreground">جارٍ تحميل إعدادات المحل...</div>
   }
 
   return (
@@ -188,29 +226,37 @@ export function StoreSettingsSection() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">المزامنة التلقائية مع Google Sheets</CardTitle>
-          <CardDescription>مزامنة تلقائية بعد كل عملية بيع/شراء/مرتجع</CardDescription>
+          <CardTitle className="text-base">تأمين موافقة المدير على الخصومات</CardTitle>
+          <CardDescription>
+            PIN منفصل عن PIN فتح الوردية. لا يُعرض أو يُخزّن كنص واضح، وتغييرُه يتطلب كلمة مرور المدير الحالية.
+          </CardDescription>
         </CardHeader>
-        <CardContent>
-          <div className="flex items-center justify-between rounded-md border p-3">
-            <div>
-              <Label>تفعيل المزامنة التلقائية</Label>
-              <p className="text-xs text-muted-foreground">عند كل عملية، يتم تحديث الأوراق المتأثرة في Google Sheet تلقائياً</p>
-            </div>
-            <Switch checked={form.autoSyncEnabled !== 'false'} onCheckedChange={(c) => update('autoSyncEnabled', c)} />
+        <CardContent className="space-y-4">
+          <div className="rounded-lg border p-3 text-sm">
+            {managerPinStatus.isLoading
+              ? 'جاري فحص إعداد PIN المدير...'
+              : managerPinStatus.data?.configured
+                ? 'تم إعداد PIN موافقة المدير.'
+                : 'لم يتم إعداد PIN موافقة المدير بعد. لن تعمل موافقات الأسعار الخاصة حتى إعداده.'}
           </div>
-          <div className="mt-3 rounded-md bg-muted/40 p-3 text-xs text-muted-foreground">
-            <p className="font-medium text-foreground mb-1">كيف تعمل المزامنة التلقائية؟</p>
-            <ul className="space-y-1 list-disc list-inside">
-              <li>عند بيع: تُحدّث أوراق <b>Sales + SaleItems</b> (+ Customers لو آجل)</li>
-              <li>عند شراء: تُحدّث أوراق <b>Purchases + PurchaseItems + Variants</b> (+ Suppliers)</li>
-              <li>عند مرتجع: تُحدّث أوراق <b>SaleReturns + Variants</b></li>
-              <li>عند دفعة: تُحدّث أوراق <b>CustomerPayments / SupplierPayments</b></li>
-              <li>عند تعديل مخزون/منتج: تُحدّث أوراق <b>Variants / Products</b></li>
-            </ul>
-            <p className="mt-2 text-amber-700 dark:text-amber-400">
-              ⚠️ الفشل في المزامنة لا يوقف العملية — يمكنك إعادة المزامنة يدوياً من صفحة المزامنة.
-            </p>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="admin-current-password">كلمة مرور المدير الحالية</Label>
+              <Input id="admin-current-password" type="password" autoComplete="current-password" value={adminPassword} onChange={(event) => setAdminPassword(event.target.value)} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="manager-approval-pin">PIN الموافقة الجديد (4 إلى 6 أرقام)</Label>
+              <Input id="manager-approval-pin" type="password" inputMode="numeric" autoComplete="new-password" pattern="[0-9]{4,6}" maxLength={6} value={managerPin} onChange={(event) => setManagerPin(event.target.value.replace(/\D/g, '').slice(0, 6))} />
+            </div>
+          </div>
+          <div className="flex justify-end">
+            <Button
+              type="button"
+              onClick={() => managerPinMutation.mutate()}
+              disabled={managerPinMutation.isPending || !adminPassword || !/^[0-9]{4,6}$/.test(managerPin)}
+            >
+              {managerPinMutation.isPending ? 'جاري التأمين...' : managerPinStatus.data?.configured ? 'تغيير PIN المدير' : 'تعيين PIN المدير'}
+            </Button>
           </div>
         </CardContent>
       </Card>

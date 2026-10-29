@@ -5,16 +5,12 @@
 // ============================================================
 
 generator client {
-  provider     = "prisma-client"
-  output       = "../src/generated/prisma"
-  engineType   = "client"
-  runtime      = "cloudflare"
-  moduleFormat = "esm"
+  provider = "prisma-client-js"
 }
 
 datasource db {
   provider = "sqlite"
-  url      = "file:./db/tayba.db"
+  url      = env("DATABASE_URL")
 }
 
 // ------------------------------------------------------------
@@ -24,7 +20,7 @@ datasource db {
 model User {
   id           String   @id @default(cuid())
   username     String   @unique
-  passwordHash String
+  passwordHash String?
   pinHash      String?
   name         String
   role         String   @default("cashier") // 'admin' | 'manager' | 'cashier'
@@ -36,6 +32,11 @@ model User {
   auditLogs        AuditLog[]
   stockAdjustments StockAdjustment[]
   sales            Sale[]
+  purchases        Purchase[]
+  customerPayments CustomerPayment[]
+  supplierPayments SupplierPayment[]
+  saleReturns      SaleReturn[]
+  purchaseReturns  PurchaseReturn[]
 }
 
 // ------------------------------------------------------------
@@ -152,11 +153,16 @@ model Customer {
 // ------------------------------------------------------------
 
 model Purchase {
-  id         String   @id @default(cuid())
-  invoiceNo  String   @unique
-  supplierId String
-  supplier   Supplier @relation(fields: [supplierId], references: [id])
-  date       DateTime @default(now())
+  id             String   @id @default(cuid())
+  invoiceNo      String   @unique
+  idempotencyKey String?  @unique
+  supplierId    String
+  supplier      Supplier @relation(fields: [supplierId], references: [id])
+  userId        String?
+  user          User?   @relation(fields: [userId], references: [id], onDelete: SetNull)
+  paymentMethod String?
+  initialPaid   Float?
+  date          DateTime @default(now())
   subtotal   Float    @default(0)
   discount   Float    @default(0)
   taxRate    Float    @default(0)
@@ -189,6 +195,8 @@ model PurchaseItem {
   unit            String?
   unitFactor      Int?
 
+  purchaseReturnItems PurchaseReturnItem[]
+
   @@index([purchaseId])
   @@index([variantId])
 }
@@ -200,12 +208,17 @@ model PurchaseReturn {
   purchase   Purchase @relation(fields: [purchaseId], references: [id])
   supplierId String
   supplier   Supplier @relation(fields: [supplierId], references: [id])
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   date       DateTime @default(now())
   total      Float    @default(0)
   reason     String?
   notes      String?
-  status     String   @default("completed")
-  createdAt  DateTime @default(now())
+  status         String   @default("completed")
+  refundMethod   String?
+  refundAmount   Float?
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
 
   items            PurchaseReturnItem[]
   supplierPayments SupplierPayment[]
@@ -220,6 +233,8 @@ model PurchaseReturnItem {
   quantity        Int
   unitCost        Float
   total           Float
+  purchaseItemId  String?
+  purchaseItem    PurchaseItem? @relation(fields: [purchaseItemId], references: [id])
 }
 
 // ------------------------------------------------------------
@@ -240,8 +255,10 @@ model Sale {
   taxAmount     Float     @default(0)
   total         Float     @default(0)
   paid          Float     @default(0)
+  initialPaid   Float?
   change        Float     @default(0)
   paymentMethod String    @default("cash")
+  idempotencyKey String?  @unique
   status        String    @default("completed")
   voidReason    String?
   notes         String?
@@ -281,13 +298,18 @@ model SaleReturn {
   sale       Sale     @relation(fields: [saleId], references: [id])
   customerId String?
   customer   Customer? @relation(fields: [customerId], references: [id])
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
   date       DateTime @default(now())
   subtotal   Float    @default(0)
   total      Float    @default(0)
   reason     String?
   notes      String?
-  status     String   @default("completed")
-  createdAt  DateTime @default(now())
+  status         String   @default("completed")
+  refundMethod   String?
+  refundAmount   Float?
+  idempotencyKey String?  @unique
+  createdAt      DateTime @default(now())
 
   items            SaleReturnItem[]
   customerPayments CustomerPayment[]
@@ -315,7 +337,10 @@ model SaleReturnItem {
 // ------------------------------------------------------------
 
 model CustomerPayment {
-  id           String      @id @default(cuid())
+  id              String      @id @default(cuid())
+  idempotencyKey  String?     @unique
+  userId          String?
+  user         User?       @relation(fields: [userId], references: [id], onDelete: SetNull)
   customerId   String
   customer     Customer    @relation(fields: [customerId], references: [id])
   saleId       String?
@@ -335,6 +360,9 @@ model CustomerPayment {
 
 model SupplierPayment {
   id              String         @id @default(cuid())
+  idempotencyKey  String?        @unique
+  userId          String?
+  user            User?          @relation(fields: [userId], references: [id], onDelete: SetNull)
   supplierId      String
   supplier        Supplier       @relation(fields: [supplierId], references: [id])
   purchaseId      String?

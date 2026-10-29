@@ -1,73 +1,52 @@
-import { PrismaClient } from '../generated/prisma/client'
-import { PrismaD1 } from '@prisma/adapter-d1'
-import { env as cloudflareEnv } from 'cloudflare:workers'
-import { d1AtomicAction, getD1Binding } from './d1-atomic'
+import { PrismaClient } from '@prisma/client'
+import { mkdirSync } from 'node:fs'
+import { dirname, isAbsolute, resolve } from 'node:path'
+import { localAtomicAction } from './local-atomic'
 
 /**
- * Prisma client for reads and normal CRUD operations.
- *
- * IMPORTANT:
- * Cloudflare D1 does not support Prisma interactive transactions.
- * Therefore all POS operations that require atomicity are routed
- * through d1AtomicAction(), which uses D1Database.batch() directly.
+ * Tayba POS is a local-first application. The only operational datastore is
+ * a SQLite file on this computer; network database URLs are deliberately
+ * rejected so the shop cannot silently write business data to a remote host.
  */
-
-type D1Database = ConstructorParameters<typeof PrismaD1>[0]
-type CloudflareEnv = { DB?: D1Database }
-
-function createPrismaClient(): PrismaClient {
-  const d1 = getD1Binding()
-
-  if (d1) {
-    return new PrismaClient({
-      adapter: new PrismaD1(d1),
-      log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
-    })
+export function getLocalDatabasePath(): string {
+  const url = (process.env.DATABASE_URL || 'file:../data/tayba.db').trim()
+  if (!url.startsWith('file:')) {
+    throw new Error('Tayba POS يعمل محليًا فقط؛ DATABASE_URL يجب أن يشير إلى ملف SQLite محلي')
   }
 
-  const databaseUrl = process.env.DATABASE_URL || 'file:./db/tayba.db'
+  const relativePath = decodeURIComponent(url.slice('file:'.length).split('?')[0])
+  // Prisma resolves relative SQLite URLs from prisma/schema.prisma.
+  const filePath = isAbsolute(relativePath)
+    ? relativePath
+    : resolve(process.cwd(), 'prisma', relativePath)
+  mkdirSync(dirname(filePath), { recursive: true })
+  return filePath
+}
+
+function localDatabaseUrl(): string {
+  getLocalDatabasePath()
+  return (process.env.DATABASE_URL || 'file:../data/tayba.db').trim()
+}
+
+function createPrismaClient(): PrismaClient {
   return new PrismaClient({
-    datasources: { db: { url: databaseUrl } },
+    datasources: { db: { url: localDatabaseUrl() } },
     log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
   })
 }
 
-// Keep the direct env access here as a safety check so a missing binding
-// cannot silently create an unconfigured production Prisma client.
-void (cloudflareEnv as CloudflareEnv)
-
-const globalForPrisma = globalThis as unknown as {
-  prisma?: PrismaClient
-}
-
-export const db: any = globalForPrisma.prisma ?? createPrismaClient()
+const globalForPrisma = globalThis as unknown as { prisma?: PrismaClient }
+export const db: PrismaClient = globalForPrisma.prisma ?? createPrismaClient()
 
 if (process.env.NODE_ENV !== 'production') {
   globalForPrisma.prisma = db
 }
 
-// Backwards-compatible aliases used by some existing UI/data helpers.
-Object.defineProperty(db.productVariant, 'fields', {
-  value: {
-    minQuantity: 'minQuantity',
-    reorderQty: 'reorderQty',
-  },
-  enumerable: false,
-  configurable: true,
-})
-
 export async function atomicAction<T = any>(
   action: string,
-  payload: Record<string, any> = {}
+  payload: Record<string, any> = {},
 ): Promise<T> {
-  const input = payload.payload ?? payload
-  const d1 = getD1Binding()
-
-  if (!d1) {
-    throw new Error('atomicAction requires a Cloudflare D1 binding')
-  }
-
-  return d1AtomicAction<T>(action, input, d1)
+  return localAtomicAction<T>(db, action, payload)
 }
 
 export type DatabaseModelName = keyof PrismaClient

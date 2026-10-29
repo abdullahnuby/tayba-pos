@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { clearIdempotencyKey, withIdempotencyKey } from '@/lib/client-idempotency'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -26,8 +27,10 @@ function money(v: number) { return `${formatEGP(v)} ج.م` }
 
 export function SalesSection({ user }: { user: SessionUser }) {
   const qc = useQueryClient()
+  const submissionKeyRef = useRef<{ fingerprint: string; key: string } | null>(null)
   const setSection = useAppStore(s => s.setSection)
   const barcodeRef = useRef<HTMLInputElement>(null)
+  const searchRef = useRef<HTMLInputElement>(null)
   const [search, setSearch] = useState('')
   const [category, setCategory] = useState('all')
   const [cart, setCart] = useState<CartItem[]>([])
@@ -46,8 +49,9 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const [historyOpen, setHistoryOpen] = useState(false)
   const [viewing, setViewing] = useState<Sale | null>(null)
   const [printing, setPrinting] = useState<Sale | null>(null)
+  const [printingHistorical, setPrintingHistorical] = useState(false)
 
-  const { data: shiftData, isLoading: shiftLoading } = useQuery<{ items: Array<{ id: string; status: string; openingFloat: number }> }>({
+  const { data: shiftData, isLoading: shiftLoading, isError: shiftError, refetch: refetchShift } = useQuery<{ items: Array<{ id: string; status: string; openingFloat: number }> }>({
     queryKey: ['register-sessions'],
     queryFn: async () => { const r = await fetch('/api/register-sessions'); if (!r.ok) throw new Error('register'); return r.json() },
     refetchInterval: 30000,
@@ -57,6 +61,15 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const productsQuery = useQuery<{ items: Product[] }>({ queryKey: ['pos-products'], queryFn: async () => { const r = await fetch('/api/products?pageSize=500'); if (!r.ok) throw new Error('products'); return r.json() }, staleTime: 30000 })
   const customersQuery = useQuery<Customer[]>({ queryKey: ['customers'], queryFn: async () => { const r = await fetch('/api/customers'); if (!r.ok) throw new Error('customers'); return r.json() }, staleTime: 30000 })
   const salesQuery = useQuery<{ items: Sale[] }>({ queryKey: ['sales'], queryFn: async () => { const r = await fetch('/api/sales?pageSize=100'); if (!r.ok) throw new Error('sales'); return r.json() } })
+  const pricingSettingsQuery = useQuery<{ vatEnabled: boolean; vatRate: number; vatInclusive: boolean; currency: string }>({
+    queryKey: ['pos-pricing-settings'],
+    queryFn: async () => {
+      const response = await fetch('/api/pos-settings', { cache: 'no-store' })
+      if (!response.ok) throw new Error('تعذر تحميل إعدادات الضريبة؛ لا تعتمد فاتورة بإجمالي غير معروف')
+      return response.json()
+    },
+    staleTime: 60_000,
+  })
 
   const products = productsQuery.data?.items || []
   const customers = customersQuery.data || []
@@ -81,10 +94,20 @@ export function SalesSection({ user }: { user: SessionUser }) {
   }, [products, search, category])
 
   const selectedCustomer = customers.find(c => c.id === customerId)
-  const subtotal = cart.reduce((s, i) => s + i.price * i.quantity, 0)
-  const total = Math.max(0, subtotal - discount)
-  const change = Math.max(0, paid - total)
-  const remaining = Math.max(0, total - paid)
+  const roundCurrencyAmount = (value: number) => Math.round((value + Number.EPSILON) * 100) / 100
+  const subtotal = roundCurrencyAmount(cart.reduce((sum, item) => sum + roundCurrencyAmount(item.price * item.quantity), 0))
+  const discountAmount = roundCurrencyAmount(discount)
+  const taxable = roundCurrencyAmount(Math.max(0, subtotal - discountAmount))
+  const vatEnabled = pricingSettingsQuery.data?.vatEnabled === true
+  const vatRate = Math.max(0, Math.min(100, Number(pricingSettingsQuery.data?.vatRate) || 0))
+  const vatInclusive = pricingSettingsQuery.data?.vatInclusive === true
+  const taxAmount = roundCurrencyAmount(vatEnabled
+    ? (vatInclusive ? taxable - taxable / (1 + vatRate / 100) : taxable * vatRate / 100)
+    : 0)
+  const total = roundCurrencyAmount(vatEnabled && vatInclusive ? taxable : taxable + taxAmount)
+  const paidAmount = roundCurrencyAmount(paid)
+  const change = roundCurrencyAmount(Math.max(0, paidAmount - total))
+  const remaining = roundCurrencyAmount(Math.max(0, total - paidAmount))
 
   const saveCustomer = useMutation({
     mutationFn: async (data: { name: string; phone: string }) => { const r = await fetch('/api/customers', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'تعذر إضافة العميل'); return j },
@@ -93,13 +116,13 @@ export function SalesSection({ user }: { user: SessionUser }) {
   })
   const saveSale = useMutation({
     mutationFn: async (payload: Record<string, unknown>) => { const r = await fetch('/api/sales', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) }); const j = await r.json(); if (!r.ok) throw new Error(j.error || 'تعذر حفظ الفاتورة'); return j as Sale },
-    onSuccess: (sale: Sale) => { qc.invalidateQueries({ queryKey: ['sales'] }); qc.invalidateQueries({ queryKey: ['pos-products'] }); qc.invalidateQueries({ queryKey: ['register-sessions'] }); setCheckout(false); setPrinting(sale); resetSale(); toast.success(`تمت الفاتورة ${sale.invoiceNo}`) },
+    onSuccess: (sale: Sale) => { clearIdempotencyKey(submissionKeyRef); qc.invalidateQueries({ queryKey: ['sales'] }); qc.invalidateQueries({ queryKey: ['pos-products'] }); qc.invalidateQueries({ queryKey: ['register-sessions'] }); setCheckout(false); setPrintingHistorical(false); setPrinting(sale); resetSale(); toast.success(`تمت الفاتورة ${sale.invoiceNo}`) },
     onError: (e: Error) => toast.error(e.message),
   })
 
   useEffect(() => { setTimeout(() => barcodeRef.current?.focus(), 150) }, [])
 
-  function resetSale() { setCart([]); setCustomerId(''); setCustomerPickerOpen(false); setPaymentMethod('cash'); setPaid(0); setDiscount(0); setHistorical(false); setSaleDate(new Date().toISOString().slice(0, 10)); setSearch(''); setTimeout(() => barcodeRef.current?.focus(), 100) }
+  function resetSale() { clearIdempotencyKey(submissionKeyRef); setCart([]); setCustomerId(''); setCustomerPickerOpen(false); setPaymentMethod('cash'); setPaid(0); setDiscount(0); setHistorical(false); setSaleDate(new Date().toISOString().slice(0, 10)); setSearch(''); setTimeout(() => barcodeRef.current?.focus(), 100) }
 
   function hasPackPricing(v: Variant) { return (v.quarterDozenPrice ?? 0) > 0 || (v.halfDozenPrice ?? 0) > 0 || (v.dozenPrice ?? 0) > 0 }
   function chooseProduct(p: Product) {
@@ -132,31 +155,44 @@ export function SalesSection({ user }: { user: SessionUser }) {
   function changeQty(index: number, delta: number) { setCart(c => c.map((x, k) => k === index ? { ...x, quantity: Math.max(1, Math.min(Math.floor(x.max / x.factor), x.quantity + delta)) } : x)) }
   function removeItem(index: number) { setCart(c => c.filter((_, k) => k !== index)) }
 
-  function scanBarcode(code: string) {
-    if (!code.trim()) return
-    const found = products.flatMap(p => p.variants.map(v => ({ v, name: p.name }))).find(x => x.v.barcode === code || x.v.sku === code)
-    if (found) handlePickVariant(found.v, found.name)
-    else toast.error('الباركود غير موجود')
+  function scanBarcode(code: string): boolean {
+    const normalizedCode = code.trim()
+    if (!normalizedCode) return false
+    const normalizedLookup = normalizedCode.toLocaleLowerCase()
+    const found = products
+      .flatMap(p => p.variants.map(v => ({ v, name: p.name })))
+      .find(x =>
+        (x.v.barcode || '').trim().toLocaleLowerCase() === normalizedLookup ||
+        x.v.sku.trim().toLocaleLowerCase() === normalizedLookup,
+      )
+    if (!found) {
+      toast.error('لم يتم العثور على صنف بهذا الباركود أو كود الصنف')
+      return false
+    }
+    handlePickVariant(found.v, found.name)
+    return true
   }
 
   function quickPay(m: 'cash' | 'card' | 'transfer' | 'credit') { setPaymentMethod(m); setPaid(m === 'credit' ? 0 : total) }
 
   function submit() {
+    if (pricingSettingsQuery.isError) return toast.error('تعذر تحميل إعدادات الضريبة؛ لم يتم حفظ الفاتورة')
+    if (pricingSettingsQuery.isLoading || !pricingSettingsQuery.data) return toast.error('جاري تحميل إعدادات الضريبة؛ حاول بعد اكتمال التحميل')
     if (!cart.length) return toast.error('أضف صنفًا أولًا')
-    if (discount > subtotal) return toast.error('الخصم أكبر من الإجمالي')
+    if (discountAmount > subtotal) return toast.error('الخصم أكبر من الإجمالي')
     if (paymentMethod === 'credit' && !customerId) return toast.error('اختر العميل للبيع الآجل')
-    if (paymentMethod !== 'credit' && paid < total) return toast.error('المبلغ المدفوع غير مكتمل')
+    if (paymentMethod !== 'credit' && paidAmount < total) return toast.error('المبلغ المدفوع غير مكتمل')
+    if (paymentMethod !== 'cash' && paidAmount > total) return toast.error('المبلغ المدفوع لا يمكن أن يتجاوز الإجمالي لهذه الطريقة')
     const payload = {
       customerId: customerId || undefined,
       date: (historical && user.role !== 'cashier') ? saleDate : undefined,
-      discount,
-      paid: paymentMethod === 'credit' ? 0 : paid,
+      discount: discountAmount,
+      paid: paymentMethod === 'credit' ? 0 : paidAmount,
       paymentMethod,
       status: 'completed',
       items: cart.map(i => ({ variantId: i.variantId, quantity: i.quantity * i.factor, unitPrice: i.price / i.factor })),
-      idempotencyKey: `${user.id}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     }
-    saveSale.mutate(payload)
+    saveSale.mutate(withIdempotencyKey(payload, submissionKeyRef))
   }
   function shareReceipt(s: Sale) {
     const text = `طيبة\nفاتورة ${s.invoiceNo}\nالتاريخ: ${formatDateTime(s.date)}\nالإجمالي: ${money(s.total)}`
@@ -165,6 +201,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
   }
 
   if (user.role === 'cashier' && shiftLoading) return <div className="p-6"><Skeleton className="h-40 w-full rounded-3xl" /></div>
+  if (user.role === 'cashier' && shiftError) return <Card className="mx-auto mt-8 max-w-xl p-8 text-center"><Banknote className="mx-auto size-12 text-destructive" /><h2 className="mt-4 text-xl font-black">تعذر التحقق من حالة الوردية</h2><p className="mt-2 text-sm text-muted-foreground">لم يتم تغيير أي بيانات. أعد المحاولة قبل بدء البيع.</p><Button variant="outline" className="mt-5 h-12" onClick={() => void refetchShift()}>إعادة المحاولة</Button><Button className="mt-2 h-12 w-full" onClick={() => setSection('register')}>فتح شاشة الوردية</Button></Card>
   if (user.role === 'cashier' && !openShift) return <Card className="mx-auto mt-8 max-w-xl p-8 text-center"><Banknote className="mx-auto size-12 text-primary" /><h2 className="mt-4 text-2xl font-black">الوردية غير مفتوحة</h2><p className="mt-2 text-muted-foreground">لا يمكن للكاشير إصدار فواتير قبل فتح الوردية.</p><Button className="mt-5 h-12" onClick={() => setSection('register')}>فتح الوردية</Button></Card>
 
   return <div className="flex h-[100dvh] flex-col overflow-hidden bg-muted/10 lg:h-auto lg:min-h-[calc(100vh-8rem)] lg:rounded-3xl lg:border">
@@ -172,7 +209,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <div className="shrink-0 border-b bg-background px-3 py-2.5 sm:px-4">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="icon" className="size-10 rounded-2xl lg:hidden" onClick={() => setSection('dashboard')} aria-label="لوحة التحكم"><Menu className="size-5" /></Button>
+          <Button variant="outline" size="icon" className="size-10 rounded-2xl lg:hidden" onClick={() => setSection(user.role === 'cashier' ? 'register' : 'dashboard')} aria-label={user.role === 'cashier' ? 'الوردية' : 'لوحة التحكم'} title={user.role === 'cashier' ? 'الانتقال إلى الوردية' : 'لوحة التحكم'}><Menu className="size-5" /></Button>
           <ReceiptText className="size-5 text-primary" /><b className="text-lg">نقطة البيع</b>
           {openShift && <Badge className="hidden xs:inline-flex">وردية مفتوحة</Badge>}
         </div>
@@ -184,12 +221,14 @@ export function SalesSection({ user }: { user: SessionUser }) {
       {historical && <div className="mt-2.5 flex flex-wrap items-end gap-3 rounded-2xl border bg-muted/30 p-3"><div><Label className="text-xs">تاريخ الفاتورة الورقية</Label><Input type="date" value={saleDate} max={new Date().toISOString().slice(0, 10)} onChange={e => setSaleDate(e.target.value)} className="mt-1 h-11" /></div><p className="text-xs text-muted-foreground">لإدخال فواتير الورق بتاريخها الحقيقي.</p></div>}
     </div>
 
+    {pricingSettingsQuery.isError && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-sm"><span className="text-destructive">تعذر تحميل إعدادات الضريبة؛ إنهاء البيع متوقف حتى تصبح الإعدادات متاحة.</span><Button type="button" size="sm" variant="outline" onClick={() => void pricingSettingsQuery.refetch()}>إعادة المحاولة</Button></div>}
+
     {/* Search */}
     <div className="shrink-0 border-b bg-background px-3 py-2.5 sm:px-4">
       <div className="flex gap-2">
-        <div className="relative flex-1"><Search className="absolute right-3 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" /><input value={search} onChange={e => setSearch(e.target.value)} className="h-12 w-full rounded-2xl border bg-muted/30 px-11 text-sm outline-none focus:ring-2 focus:ring-primary/30" placeholder="ابحث بالباركود أو الاسم أو SKU..." /></div>
-        <input ref={barcodeRef} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); scanBarcode((e.target as HTMLInputElement).value); (e.target as HTMLInputElement).value = '' } }} inputMode="none" autoComplete="off" className="absolute size-px opacity-0" tabIndex={-1} aria-hidden />
-        <Button type="button" size="icon" className="size-12 shrink-0 rounded-2xl" onClick={() => { const code = prompt('أدخل الباركود'); if (code) scanBarcode(code) }} aria-label="مسح باركود"><Barcode className="size-5" /></Button>
+        <div className="relative flex-1"><Search className="absolute right-3 top-1/2 size-5 -translate-y-1/2 text-muted-foreground" /><input ref={searchRef} value={search} onChange={e => setSearch(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && search.trim()) { e.preventDefault(); if (scanBarcode(search)) setSearch('') } }} aria-label="بحث أو مسح باركود" className="h-12 w-full rounded-2xl border bg-muted/30 px-11 text-sm outline-none focus:ring-2 focus:ring-primary/30" placeholder="امسح الباركود أو ابحث بالاسم أو SKU..." /></div>
+        <input ref={barcodeRef} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); const target = e.target as HTMLInputElement; scanBarcode(target.value); target.value = '' } }} inputMode="none" autoComplete="off" className="absolute size-px opacity-0" tabIndex={-1} aria-hidden />
+        <Button type="button" size="icon" className="size-12 shrink-0 rounded-2xl" onClick={() => { searchRef.current?.focus(); searchRef.current?.select() }} aria-label="تجهيز قارئ الباركود" title="ضع المؤشر في خانة المسح ثم امسح الباركود"><Barcode className="size-5" /></Button>
       </div>
     </div>
 
@@ -204,6 +243,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[1fr_400px]">
       <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         {productsQuery.isLoading ? <div className="grid grid-cols-3 gap-2">{Array.from({ length: 9 }).map((_, i) => <Skeleton key={i} className="h-[6.5rem] rounded-2xl" />)}</div> :
+          productsQuery.isError ? <div className="flex flex-col items-center gap-3 py-12 text-center"><p className="text-sm text-destructive">تعذر تحميل الأصناف؛ لم يتم إضافة أي شيء للسلة.</p><Button variant="outline" onClick={() => void productsQuery.refetch()}>إعادة المحاولة</Button></div> :
           visible.length === 0 ? <div className="py-16 text-center text-muted-foreground">لا توجد أصناف مطابقة</div> :
           <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
             {visible.map(p => {
@@ -234,7 +274,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
         {customerPickerOpen && <div className="flex shrink-0 gap-2 overflow-x-auto border-b p-2 touch-pan-x">
           <button type="button" onClick={() => { setCustomerId(''); setCustomerPickerOpen(false) }} className={`min-w-max rounded-xl border px-3 py-2 text-xs font-bold ${!customerId ? 'border-primary bg-primary/10' : 'bg-card'}`}>عميل نقدي</button>
           {customers.map(c => <button key={c.id} type="button" onClick={() => { setCustomerId(c.id); setCustomerPickerOpen(false) }} className={`min-w-max rounded-xl border px-3 py-2 text-xs font-bold ${customerId === c.id ? 'border-primary bg-primary/10' : 'bg-card'}`}>{c.name}</button>)}
-          {!customers.length && <span className="py-2 text-xs text-muted-foreground">لا يوجد عملاء بعد</span>}
+          {customersQuery.isError ? <span className="flex items-center gap-2 py-2 text-xs text-destructive">تعذر تحميل العملاء <Button size="sm" variant="outline" onClick={() => void customersQuery.refetch()}>إعادة المحاولة</Button></span> : !customers.length && <span className="py-2 text-xs text-muted-foreground">لا يوجد عملاء بعد</span>}
         </div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
@@ -250,9 +290,10 @@ export function SalesSection({ user }: { user: SessionUser }) {
         <div className="shrink-0 border-t bg-card p-2.5 pb-[max(.65rem,env(safe-area-inset-bottom))]">
           <div className="flex items-stretch gap-2">
             <div className="flex shrink-0 flex-col items-center justify-center rounded-2xl border px-3 text-[11px]"><span className="text-muted-foreground">الخصم</span><input type="number" min={0} value={discount} onChange={e => setDiscount(Math.max(0, Number(e.target.value) || 0))} className="w-14 bg-transparent text-center font-black outline-none" /></div>
-            <div className="flex flex-1 items-center justify-between rounded-2xl bg-primary px-3 py-2 text-primary-foreground"><span className="text-xs font-bold opacity-90">الإجمالي</span><span className="text-xl font-black tabular-nums">{money(total)}</span></div>
+            {vatEnabled && <div className="flex items-center justify-between rounded-xl border px-3 py-2 text-sm"><span>{vatInclusive ? 'ضريبة القيمة المضافة (ضمن السعر)' : 'ضريبة القيمة المضافة'}</span><b>{money(taxAmount)}</b></div>}
+          <div className="flex flex-1 items-center justify-between rounded-2xl bg-primary px-3 py-2 text-primary-foreground"><span className="text-xs font-bold opacity-90">الإجمالي</span><span className="text-xl font-black tabular-nums">{money(total)}</span></div>
           </div>
-          <Button type="button" className="mt-1.5 h-12 w-full rounded-2xl text-base font-black" disabled={!cart.length || saveSale.isPending} onClick={() => { setPaid(total); setCheckout(true) }}>{saveSale.isPending ? 'جارٍ الحفظ...' : 'إنهاء الفاتورة'}</Button>
+          <Button type="button" className="mt-1.5 h-12 w-full rounded-2xl text-base font-black" disabled={!cart.length || saveSale.isPending || pricingSettingsQuery.isLoading || pricingSettingsQuery.isError} onClick={() => { setPaid(total); setCheckout(true) }}>{saveSale.isPending ? 'جارٍ الحفظ...' : 'إنهاء الفاتورة'}</Button>
         </div>
       </div>
     </div>
@@ -283,10 +324,10 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <Dialog open={customerDialog} onOpenChange={v => !saveCustomer.isPending && setCustomerDialog(v)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>إضافة عميل سريع</DialogTitle></DialogHeader><div className="space-y-3"><div><Label>الاسم *</Label><Input value={customerForm.name} onChange={e => setCustomerForm({ ...customerForm, name: e.target.value })} /></div><div><Label>الهاتف</Label><Input value={customerForm.phone} onChange={e => setCustomerForm({ ...customerForm, phone: e.target.value })} dir="ltr" /></div></div><DialogFooter><Button variant="outline" onClick={() => setCustomerDialog(false)} disabled={saveCustomer.isPending}>إلغاء</Button><Button onClick={() => saveCustomer.mutate(customerForm)} disabled={saveCustomer.isPending || !customerForm.name.trim()}>{saveCustomer.isPending ? 'جارٍ الحفظ...' : 'حفظ العميل'}</Button></DialogFooter></DialogContent></Dialog>
 
     {/* Receipt after checkout */}
-    <Dialog open={!!printing} onOpenChange={v => !v && setPrinting(null)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة تمت بنجاح</DialogTitle></DialogHeader>{printing && <div id="printable-invoice" className="rounded-xl border bg-white p-4 text-black"><div className="text-center text-xl font-black">طيبة</div><div className="mt-2 text-sm">فاتورة: {printing.invoiceNo}</div><div className="text-sm">التاريخ: {formatDateTime(printing.date)}</div>{printing.items.map(i => <div key={i.id} className="flex justify-between border-b py-2 text-sm"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="mt-3 flex justify-between font-black"><span>الإجمالي</span><span>{money(printing.total)}</span></div></div>}<div className="grid grid-cols-2 gap-2"><Button onClick={() => window.print()}><Printer className="size-4" /> طباعة</Button><Button variant="outline" onClick={() => printing && shareReceipt(printing)}><Share2 className="size-4" /> مشاركة</Button></div><Button className="w-full" onClick={() => setPrinting(null)}><CheckCircle2 className="size-4" /> فاتورة جديدة</Button></DialogContent></Dialog>
+    <Dialog open={!!printing} onOpenChange={v => { if (!v) { setPrinting(null); setPrintingHistorical(false); window.setTimeout(() => barcodeRef.current?.focus(), 100) } }}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>{printingHistorical ? 'إعادة طباعة فاتورة' : 'الفاتورة تمت بنجاح'}</DialogTitle></DialogHeader>{printing && <div id="printable-invoice" className="rounded-xl border bg-white p-4 text-black"><div className="text-center text-xl font-black">طيبة</div><div className="mt-2 text-sm">فاتورة: {printing.invoiceNo}</div><div className="text-sm">التاريخ: {formatDateTime(printing.date)}</div>{printing.items.map(i => <div key={i.id} className="flex justify-between border-b py-2 text-sm"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="mt-3 flex justify-between font-black"><span>الإجمالي</span><span>{money(printing.total)}</span></div></div>}<div className="grid grid-cols-2 gap-2"><Button onClick={() => window.print()}><Printer className="size-4" /> طباعة</Button><Button variant="outline" onClick={() => printing && shareReceipt(printing)}><Share2 className="size-4" /> مشاركة</Button></div><Button className="w-full" onClick={() => { setPrinting(null); setPrintingHistorical(false); window.setTimeout(() => barcodeRef.current?.focus(), 100) }}><CheckCircle2 className="size-4" /> {printingHistorical ? 'إغلاق' : 'فاتورة جديدة'}</Button></DialogContent></Dialog>
 
     {/* History */}
-    <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-h-[90dvh] overflow-y-auto rounded-3xl sm:max-w-2xl"><DialogHeader><DialogTitle>سجل الفواتير</DialogTitle></DialogHeader>{salesQuery.isLoading ? <Skeleton className="h-24" /> : <div className="space-y-2">{sales.map(s => <div key={s.id} className="rounded-xl border p-3"><div className="flex justify-between"><b>{s.invoiceNo}</b><Badge variant={saleStatusBadgeVariant(s.status)}>{saleStatusLabel(s.status)}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{formatDateTime(s.date)} · {s.customer?.name || 'عميل نقدي'}</div><div className="mt-2 flex justify-between"><b>{money(s.total)}</b><Button size="sm" variant="outline" onClick={() => setViewing(s)}><Eye className="size-4" /> عرض</Button></div></div>)}</div>}</DialogContent></Dialog>
-    <Dialog open={!!viewing} onOpenChange={v => !v && setViewing(null)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة {viewing?.invoiceNo}</DialogTitle></DialogHeader>{viewing && <div className="space-y-2">{viewing.items.map(i => <div key={i.id} className="flex justify-between rounded-xl border p-3"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="flex justify-between rounded-xl bg-muted p-3"><span>الإجمالي</span><b>{money(viewing.total)}</b></div></div>}</DialogContent></Dialog>
+    <Dialog open={historyOpen} onOpenChange={setHistoryOpen}><DialogContent className="max-h-[90dvh] overflow-y-auto rounded-3xl sm:max-w-2xl"><DialogHeader><DialogTitle>سجل الفواتير</DialogTitle></DialogHeader>{salesQuery.isLoading ? <Skeleton className="h-24" /> : salesQuery.isError ? <div className="flex flex-col items-center gap-3 py-8 text-center"><p className="text-sm text-destructive">تعذر تحميل سجل الفواتير.</p><Button variant="outline" onClick={() => void salesQuery.refetch()}>إعادة المحاولة</Button></div> : sales.length === 0 ? <div className="py-8 text-center text-sm text-muted-foreground">لا توجد فواتير مسجلة حتى الآن.</div> : <div className="space-y-2">{sales.map(s => <div key={s.id} className="rounded-xl border p-3"><div className="flex justify-between"><b>{s.invoiceNo}</b><Badge variant={saleStatusBadgeVariant(s.status)}>{saleStatusLabel(s.status)}</Badge></div><div className="mt-1 text-xs text-muted-foreground">{formatDateTime(s.date)} · {s.customer?.name || 'عميل نقدي'}</div><div className="mt-2 flex justify-between"><b>{money(s.total)}</b><Button size="sm" variant="outline" onClick={() => setViewing(s)}><Eye className="size-4" /> عرض</Button></div></div>)}</div>}</DialogContent></Dialog>
+    <Dialog open={!!viewing} onOpenChange={v => !v && setViewing(null)}><DialogContent className="rounded-3xl"><DialogHeader><DialogTitle>الفاتورة {viewing?.invoiceNo}</DialogTitle></DialogHeader>{viewing && <div className="space-y-2">{viewing.items.map(i => <div key={i.id} className="flex justify-between rounded-xl border p-3"><span>{i.variant?.product?.name || 'صنف'} × {i.quantity}</span><b>{money(i.total)}</b></div>)}<div className="flex justify-between rounded-xl bg-muted p-3"><span>الإجمالي</span><b>{money(viewing.total)}</b></div></div>}{viewing && <DialogFooter><Button className="w-full" onClick={() => { setPrintingHistorical(true); setPrinting(viewing); setViewing(null) }}><Printer className="size-4" /> إعادة طباعة الفاتورة</Button></DialogFooter>}</DialogContent></Dialog>
   </div>
 }

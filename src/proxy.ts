@@ -1,28 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isUnsafeCrossOriginRequest } from '@/lib/request-origin'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 /**
- * Next.js middleware — applies security headers to all responses.
- *
- * Headers added:
- * - X-Content-Type-Options: nosniff
- * - X-Frame-Options: DENY (prevents clickjacking)
- * - Referrer-Policy: strict-origin-when-cross-origin
- * - X-XSS-Protection: 1; mode=block (legacy, but doesn't hurt)
- *
- * Note: HSTS is handled by Caddy/HTTPS proxy in production.
+ * Apply browser security controls centrally, before any API route executes.
+ * The app is intended to run as a local POS, so cross-origin browser writes
+ * are never required.
  */
-export function proxy(_req: NextRequest) {
-  const response = NextResponse.next()
+export function proxy(req: NextRequest) {
+  const isApi = req.nextUrl.pathname.startsWith('/api/')
+  const method = req.method.toUpperCase()
+  const unsafeWrite = ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method)
 
-  // Security headers
+  if (isApi && unsafeWrite && isUnsafeCrossOriginRequest(req)) {
+    return NextResponse.json(
+      { error: 'تم رفض الطلب لأنه صادر من مصدر مختلف عن البرنامج' },
+      { status: 403, headers: { 'Cache-Control': 'no-store' } },
+    )
+  }
+
+  // Enforce a write limit even for routes that use getCurrentUser() directly
+  // rather than the shared authenticate() helper. Specific endpoints retain
+  // their tighter login/setup/PIN limits in addition to this global ceiling.
+  if (isApi && unsafeWrite) {
+    const limited = applyRateLimit(req, 'proxy-api-write', RATE_LIMITS.api_write.max, RATE_LIMITS.api_write.window)
+    if (limited) {
+      limited.headers.set('Cache-Control', 'no-store')
+      limited.headers.set('X-Content-Type-Options', 'nosniff')
+      return limited
+    }
+  }
+
+  if (isApi && !unsafeWrite) {
+    const limited = applyRateLimit(req, 'proxy-api-read', RATE_LIMITS.api_general.max, RATE_LIMITS.api_general.window)
+    if (limited) {
+      limited.headers.set('Cache-Control', 'no-store')
+      limited.headers.set('X-Content-Type-Options', 'nosniff')
+      return limited
+    }
+  }
+
+  const response = NextResponse.next()
   response.headers.set('X-Content-Type-Options', 'nosniff')
   response.headers.set('X-Frame-Options', 'DENY')
   response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin')
   response.headers.set('X-XSS-Protection', '1; mode=block')
   response.headers.set('Permissions-Policy', 'camera=(), microphone=(), geolocation=()')
 
-  // Cache control for API responses (no caching of sensitive data)
-  if (_req.nextUrl.pathname.startsWith('/api/')) {
+  if (isApi) {
     response.headers.set('Cache-Control', 'no-store, no-cache, must-revalidate')
   }
 
@@ -31,12 +56,6 @@ export function proxy(_req: NextRequest) {
 
 export const config = {
   matcher: [
-    /*
-     * Match all paths except:
-     * - _next/static (static files)
-     * - _next/image (image optimization)
-     * - favicon.ico, robots.txt, logo.svg
-     */
     '/((?!_next/static|_next/image|favicon.ico|robots.txt|logo.svg).*)',
   ],
 }

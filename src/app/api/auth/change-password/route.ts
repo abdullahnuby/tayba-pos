@@ -1,7 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { db } from '@/lib/db'
-import { getCurrentUser, verifyPassword, hashPassword, validatePasswordPolicy, clearMustChangePassword } from '@/lib/auth'
+import { getCurrentUser, verifyPassword, verifyPin, hashPassword, validatePasswordPolicy, createSessionToken, SESSION_COOKIE_NAME, SESSION_MAX_AGE, type SessionUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 import { z } from 'zod'
 
 const schema = z.object({
@@ -11,7 +13,10 @@ const schema = z.object({
 
 export async function POST(req: NextRequest) {
   try {
-    const user = await getCurrentUser()
+    const limited = applyRateLimit(req, 'password-change', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
+    if (limited) return limited
+
+    const user = await getCurrentUser({ allowMustChangePassword: true })
     if (!user) return NextResponse.json({ error: 'غير مصرح' }, { status: 401 })
 
     const body = await req.json()
@@ -23,8 +28,11 @@ export async function POST(req: NextRequest) {
 
     const dbUser = await db.user.findUnique({ where: { id: user.id } })
     if (!dbUser) return NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
-    if (!verifyPassword(currentPassword, dbUser.passwordHash)) {
-      return NextResponse.json({ error: 'كلمة المرور الحالية غير صحيحة' }, { status: 400 })
+    const currentCredentialValid = dbUser.passwordHash
+      ? verifyPassword(currentPassword, dbUser.passwordHash)
+      : Boolean(user.mustChangePassword && dbUser.pinHash && verifyPin(currentPassword, dbUser.pinHash))
+    if (!currentCredentialValid) {
+      return NextResponse.json({ error: 'كلمة المرور الحالية أو رقم PIN القديم غير صحيح' }, { status: 400 })
     }
 
     // Enforce password policy on new password
@@ -36,15 +44,43 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'كلمة المرور الجديدة يجب أن تكون مختلفة' }, { status: 400 })
     }
 
-    await db.user.update({
-      where: { id: user.id },
-      data: { passwordHash: hashPassword(newPassword) },
+    const nextEpoch = randomUUID()
+    const updatedUser = await db.$transaction(async (tx) => {
+      const updated = await tx.user.update({
+        where: { id: user.id },
+        data: { passwordHash: hashPassword(newPassword) },
+        select: { id: true, username: true, name: true, role: true },
+      })
+      await tx.setting.deleteMany({ where: { key: `mustChangePw:${user.id}` } })
+      await tx.setting.upsert({
+        where: { key: `sessionEpoch:${user.id}` },
+        create: { key: `sessionEpoch:${user.id}`, value: nextEpoch },
+        update: { value: nextEpoch },
+      })
+      return updated
     })
-    await clearMustChangePassword(user.id)
+
+    const refreshedUser: SessionUser = {
+      id: updatedUser.id,
+      username: updatedUser.username,
+      name: updatedUser.name,
+      role: updatedUser.role as SessionUser['role'],
+    }
+    const refreshedToken = createSessionToken(refreshedUser, nextEpoch)
 
     await auditLog({ user, action: 'password_change', entity: 'user', entityId: user.id })
 
-    return NextResponse.json({ ok: true, message: 'تم تغيير كلمة المرور بنجاح' })
+    const response = NextResponse.json({ ok: true, message: 'تم تغيير كلمة المرور بنجاح' })
+    const hostname = new URL(req.url).hostname.toLowerCase()
+    const localHttp = hostname === 'localhost' || hostname === '127.0.0.1' || hostname === '[::1]'
+    response.cookies.set(SESSION_COOKIE_NAME, refreshedToken, {
+      httpOnly: true,
+      sameSite: 'strict',
+      secure: !localHttp,
+      maxAge: SESSION_MAX_AGE,
+      path: '/',
+    })
+    return response
   } catch (e: unknown) {
     const err = e as { message?: string }
     return NextResponse.json({ error: err.message || 'خطأ' }, { status: 500 })

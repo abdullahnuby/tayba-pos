@@ -1,0 +1,65 @@
+name: Local POS quality checks
+
+on:
+  # Validate feature branches through pull_request only; also validate main after merge.
+  # Avoid duplicate push + pull_request runs cancelling each other for the same commit.
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+concurrency:
+  group: tayba-pos-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  validate-and-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      AUTH_SECRET: ci-only-do-not-use-in-production
+      DATABASE_URL: file:../data/tayba.db
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Install dependencies
+        run: npm install --no-audit --no-fund
+      - name: Validate Prisma schema
+        run: npx prisma validate
+      - name: Generate Prisma client
+        run: npx prisma generate
+      - name: Prepare isolated test database
+        run: |
+          mkdir -p data
+          DATABASE_URL=file:../data/tayba-test.db npm run db:setup
+      - name: Test core transactional behavior
+        env:
+          DATABASE_URL: file:../data/tayba-test.db
+          ALLOW_TAYBA_TEST_DATABASE: "1"
+        run: npm run test:atomic
+      - name: Test safe schema-upgrade backup and data preservation
+        env:
+          ALLOW_TAYBA_SETUP_TEST: "1"
+        run: node --test tests/safe-db-setup.test.mjs
+      - name: Test same-origin API write protection
+        run: node --experimental-strip-types --test tests/request-origin.test.ts
+      - name: Test rate-limit client identity
+        run: node --experimental-strip-types --test tests/rate-limit.test.ts
+      - name: Test session epoch and token integrity
+        run: node --experimental-strip-types --test tests/auth-session-epoch.test.ts
+      - name: Test legacy SQLite import into an isolated target
+        run: node --test tests/legacy-import.test.mjs
+      - name: TypeScript check
+        run: npx tsc --noEmit
+      - name: Lint
+        run: npm run lint
+      - name: Build
+        run: npm run build

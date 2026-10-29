@@ -1,9 +1,11 @@
 /**
  * Simple in-memory rate limiter (no external dependencies).
- * Suitable for single-instance Node deployments.
- *
- * For multi-instance/serverless, replace with Redis-backed limiter.
+ * Suitable for the current single-process local application.
  */
+
+import { NextResponse } from 'next/server'
+import { getClientIpFromHeaders } from './client-ip'
+export { getClientIpFromHeaders } from './client-ip'
 
 interface RateBucket {
   count: number
@@ -51,18 +53,6 @@ export function rateLimit(
 }
 
 /**
- * Get client IP from Next.js request headers.
- */
-export function getClientIpFromHeaders(headers: Headers): string {
-  return (
-    headers.get('x-forwarded-for')?.split(',')[0]?.trim() ||
-    headers.get('x-real-ip') ||
-    headers.get('cf-connecting-ip') ||
-    'unknown'
-  )
-}
-
-/**
  * Apply rate limit and return Response if exceeded, else null.
  * Usage:
  *   const limited = applyRateLimit(req, 'login', 5, 60_000)
@@ -96,12 +86,7 @@ export function applyRateLimit(
   return null
 }
 
-// Import here to avoid circular dependency issue
-import { NextResponse } from 'next/server'
-
-// Cleanup old buckets lazily — Cloudflare Workers disallows setInterval()
-// (or any async I/O / timers) at module/global scope, so instead we piggyback
-// the cleanup on normal rateLimit() calls, throttled to once every 5 minutes.
+// Cleanup old buckets lazily without relying on a background timer.
 let lastCleanup = Date.now()
 function maybeCleanupBuckets(now: number) {
   if (now - lastCleanup < 5 * 60 * 1000) return

@@ -14,7 +14,7 @@ const patchSchema = z.object({
   image: z.string().optional().nullable(),
   variants: z.array(z.object({
     id: z.string().optional(),
-    sku: z.string().min(1),
+    sku: z.string().trim().min(1),
     barcode: z.string().optional().nullable(),
     size: z.string().optional().nullable(),
     color: z.string().optional().nullable(),
@@ -39,7 +39,7 @@ const patchSchema = z.object({
 )
 
 export async function GET(req: NextRequest, _ctx: { params: Promise<{ id: string }> }) {
-  const auth = await authenticate(req, { skipRateLimit: true })
+  const auth = await authenticate(req, { roles: ['admin', 'manager'], skipRateLimit: true })
   if (auth instanceof Response) return auth
 
   const { id } = await _ctx.params
@@ -66,8 +66,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     // If variants provided, replace them entirely (delete + create)
     if (variants) {
-      // Validate SKU uniqueness against existing variants of OTHER products
-      const skus = variants.map((v) => v.sku)
+      // Validate unique SKUs both within the submitted list and across other products.
+      const skus = variants.map((v) => v.sku.trim())
+      if (new Set(skus).size !== skus.length) {
+        return NextResponse.json({ error: 'SKUs مكررة في نفس المنتج' }, { status: 400 })
+      }
       const conflicts = await db.productVariant.findMany({
         where: { sku: { in: skus }, productId: { not: id } },
         select: { sku: true },
@@ -78,12 +81,28 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           { status: 400 }
         )
       }
+
+      const barcodes = variants.map((v) => v.barcode?.trim() || '').filter(Boolean)
+      if (new Set(barcodes).size !== barcodes.length) {
+        return NextResponse.json({ error: 'باركود مكرر داخل المنتج' }, { status: 400 })
+      }
+      if (barcodes.length > 0) {
+        const barcodeConflicts = await db.productVariant.findMany({
+          where: { barcode: { in: barcodes }, productId: { not: id } },
+          select: { barcode: true },
+        })
+        if (barcodeConflicts.length > 0) {
+          return NextResponse.json(
+            { error: `باركود مستخدم في منتج آخر: ${barcodeConflicts.map((item) => item.barcode).filter(Boolean).join(', ')}` },
+            { status: 400 }
+          )
+        }
+      }
     }
 
-    // Cloudflare D1 doesn't support interactive transactions (a callback that
-    // awaits reads/writes one by one). So: do the read up front (outside the
-    // transaction), build the full list of write operations, then run them all
-    // together as one D1-compatible BATCH transaction (db.$transaction([...])).
+    // Build a single local SQLite transaction for product and variant changes.
+    // The stock quantity of an existing variant is never overwritten here;
+    // live inventory moves only through purchases, sales, returns and counts.
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const ops: any[] = []
 
@@ -101,12 +120,31 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const incomingIds = new Set(variants.filter((v) => v.id).map((v) => v.id as string))
       const toDelete = [...existingIds].filter((vid) => !incomingIds.has(vid))
       if (toDelete.length) {
+        const variantWhere = { variantId: { in: toDelete } }
+        const [
+          saleReferences,
+          purchaseReferences,
+          saleReturnReferences,
+          purchaseReturnReferences,
+          adjustmentReferences,
+        ] = await Promise.all([
+          db.saleItem.count({ where: variantWhere }),
+          db.purchaseItem.count({ where: variantWhere }),
+          db.saleReturnItem.count({ where: variantWhere }),
+          db.purchaseReturnItem.count({ where: variantWhere }),
+          db.stockAdjustment.count({ where: variantWhere }),
+        ])
+        if (saleReferences + purchaseReferences + saleReturnReferences + purchaseReturnReferences + adjustmentReferences > 0) {
+          return NextResponse.json({
+            error: 'لا يمكن حذف مقاس/لون مرتبط بفواتير أو مرتجعات أو حركات مخزون سابقة. احتفظ به في المنتج بدلًا من حذف تاريخه.',
+          }, { status: 409 })
+        }
         ops.push(db.productVariant.deleteMany({ where: { id: { in: toDelete } } }))
       }
       for (const v of variants) {
         const data = {
-          sku: v.sku,
-          barcode: v.barcode || null,
+          sku: v.sku.trim(),
+          barcode: v.barcode?.trim() || null,
           size: v.size || null,
           color: v.color || null,
           material: v.material || null,
@@ -145,14 +183,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // The product.update was pushed last, so its result is the last element.
     const updated = results[results.length - 1]
 
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterProduct } = await import('@/lib/sync')
-      await syncAfterProduct()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (product update):', syncErr)
-    }
-
     return NextResponse.json(updated)
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string }
@@ -180,14 +210,6 @@ export async function DELETE(req: NextRequest, { params }: { params: Promise<{ i
       )
     }
     await db.product.delete({ where: { id } })
-
-    // Auto-sync to Google Sheets (best-effort)
-    try {
-      const { syncAfterProduct } = await import('@/lib/sync')
-      await syncAfterProduct()
-    } catch (syncErr) {
-      console.error('Auto-sync failed (product delete):', syncErr)
-    }
 
     return NextResponse.json({ success: true })
   } catch (e: unknown) {

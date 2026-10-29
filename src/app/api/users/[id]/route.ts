@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { randomUUID } from 'node:crypto'
 import { db } from '@/lib/db'
 import {
   requireUser,
   hashPassword,
   validatePasswordPolicy,
-  flagMustChangePassword,
-  hashPin,
+   hashPin,
   validatePinPolicy,
 } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
@@ -75,15 +75,41 @@ export async function PATCH(
       return NextResponse.json({ error: 'لا يوجد تعديل' }, { status: 400 })
     }
 
-    const updated = await db.user.update({
-      where: { id },
-      data,
-      select: { id: true, username: true, name: true, role: true, active: true },
-    })
-
-    if (passwordReset) {
-      await flagMustChangePassword(updated.id)
+    const removingActiveAdmin = target.role === 'admin' && target.active && (
+      (typeof data.role === 'string' && data.role !== 'admin') || data.active === false
+    )
+    if (removingActiveAdmin) {
+      const activeAdminCount = await db.user.count({ where: { role: 'admin', active: true } })
+      if (activeAdminCount <= 1) {
+        return NextResponse.json({ error: 'لا يمكن تعطيل أو تغيير صلاحية آخر مدير نشط في النظام' }, { status: 409 })
+      }
     }
+
+    const revokeSessions = passwordReset || data.active !== undefined ||
+      (typeof data.role === 'string' && data.role !== target.role)
+    const nextEpoch = revokeSessions ? randomUUID() : null
+    const updated = await db.$transaction(async (tx) => {
+      const nextUser = await tx.user.update({
+        where: { id },
+        data,
+        select: { id: true, username: true, name: true, role: true, active: true },
+      })
+      if (passwordReset) {
+        await tx.setting.upsert({
+          where: { key: `mustChangePw:${nextUser.id}` },
+          create: { key: `mustChangePw:${nextUser.id}`, value: '1' },
+          update: { value: '1' },
+        })
+      }
+      if (nextEpoch) {
+        await tx.setting.upsert({
+          where: { key: `sessionEpoch:${nextUser.id}` },
+          create: { key: `sessionEpoch:${nextUser.id}`, value: nextEpoch },
+          update: { value: nextEpoch },
+        })
+      }
+      return nextUser
+    })
 
     await auditLog({
       user: me,
@@ -116,6 +142,13 @@ export async function DELETE(
     const target = await db.user.findUnique({ where: { id } })
     if (!target) {
       return NextResponse.json({ error: 'المستخدم غير موجود' }, { status: 404 })
+    }
+
+    if (target.role === 'admin' && target.active) {
+      const activeAdminCount = await db.user.count({ where: { role: 'admin', active: true } })
+      if (activeAdminCount <= 1) {
+        return NextResponse.json({ error: 'لا يمكن حذف آخر مدير نشط في النظام' }, { status: 409 })
+      }
     }
 
     await db.user.delete({ where: { id } })

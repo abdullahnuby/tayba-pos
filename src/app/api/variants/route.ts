@@ -9,7 +9,8 @@ export async function GET(req: NextRequest) {
 
   const url = new URL(req.url)
   const search = (url.searchParams.get('search') || '').trim()
-  const limit = Number(url.searchParams.get('limit') || '20')
+  const rawLimit = Number(url.searchParams.get('limit') || '20')
+  const limit = Math.min(100, Math.max(1, Number.isFinite(rawLimit) ? Math.floor(rawLimit) : 20))
 
   if (!search) {
     return NextResponse.json({ items: [] })
@@ -25,5 +26,18 @@ export async function GET(req: NextRequest) {
     include: { product: { include: { category: true } } },
     take: limit,
   })
-  return NextResponse.json({ items: variants })
+  const items = auth.user.role === 'cashier'
+    ? variants.map((variant) => {
+        const safeVariant: Record<string, unknown> = { ...variant }
+        delete safeVariant.costPrice
+        delete safeVariant.minQuantity
+        delete safeVariant.reorderQty
+        delete safeVariant.purchaseUnit
+        delete safeVariant.purchaseUnitFactor
+        delete safeVariant.baseUnit
+        return safeVariant
+      })
+    : variants
+
+  return NextResponse.json({ items }, { headers: { 'Cache-Control': 'no-store' } })
 }

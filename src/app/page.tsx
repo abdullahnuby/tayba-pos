@@ -4,12 +4,14 @@ import { useState, useEffect, useCallback } from 'react'
 import { LoginSection } from '@/components/login-section'
 import { SetupSection } from '@/components/setup-section'
 import { AppShell } from '@/components/app-shell'
+import { ForcePasswordChange } from '@/components/force-password-change'
 
 interface SessionUser {
   id: string
   username: string
   name: string
   role: 'admin' | 'manager' | 'cashier'
+  mustChangePassword?: boolean
 }
 
 type AppView = 'loading' | 'setup' | 'login' | 'app'
@@ -68,6 +70,14 @@ export default function Home() {
 
   if (view === 'login' || !user) {
     return <LoginSection onLogin={checkSession} />
+  }
+
+  if (user.mustChangePassword) {
+    return <ForcePasswordChange user={user} onComplete={checkSession} onLogout={async () => {
+      await fetch('/api/auth/logout', { method: 'POST' })
+      setUser(null)
+      setView('login')
+    }} />
   }
 
   return <AppShell user={user} onLogout={async () => {

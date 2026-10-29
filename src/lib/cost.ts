@@ -8,7 +8,7 @@
  * gets added back at the original snapshot cost, not the current MWA,
  * to preserve historical accuracy).
  */
-import { db } from './db'
+import type { Prisma } from '@prisma/client'
 
 export interface CostUpdateResult {
   newQty: number
@@ -16,7 +16,7 @@ export interface CostUpdateResult {
 }
 
 export async function applyPurchaseCost(
-  tx: Parameters<Parameters<typeof db['$transaction']>[0]>[0],
+  tx: Prisma.TransactionClient,
   variantId: string,
   qtyAdded: number,
   unitCost: number

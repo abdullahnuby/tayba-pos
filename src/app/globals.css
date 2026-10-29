@@ -167,19 +167,114 @@
   box-shadow: 0 4px 12px -2px oklch(0.45 0.11 165 / 0.08);
 }
 
+@page {
+  margin: 0;
+}
+
 @media print {
-  body * { visibility: hidden !important; }
-  #printable-invoice, #printable-invoice * { visibility: visible !important; }
-  #printable-invoice {
-    position: absolute !important;
-    left: 0 !important;
-    top: 0 !important;
-    width: 80mm !important;
-    padding: 4mm !important;
-    background: white !important;
-    color: black !important;
-    font-family: 'Cairo', sans-serif !important;
+  html, body {
+    width: 100% !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    background: #fff !important;
+    overflow: visible !important;
   }
+
+  body * { visibility: hidden !important; }
+
+  [role="dialog"]:has(#printable-invoice) {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  [role="dialog"]:has(#printable-invoice) > :not(#printable-invoice) {
+    display: none !important;
+  }
+
+  [role="dialog"]:has(#shift-report) {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  [role="dialog"]:has(#shift-report) > :not(#shift-report) {
+    display: none !important;
+  }
+
+  #printable-invoice, #printable-invoice *, #shift-report, #shift-report * {
+    visibility: visible !important;
+  }
+
+  #printable-invoice {
+    position: fixed !important;
+    inset: 0 auto auto 0 !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 72mm !important;
+    min-width: 0 !important;
+    margin: 0 !important;
+    padding: 3mm !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    font-family: 'Cairo', Arial, sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.35 !important;
+    direction: rtl !important;
+    overflow: visible !important;
+  }
+
+  #printable-invoice * { color: #000 !important; }
+
+  #shift-report {
+    position: fixed !important;
+    inset: 0 auto auto 0 !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 180mm !important;
+    min-width: 0 !important;
+    margin: 0 auto !important;
+    padding: 10mm !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    font-family: 'Cairo', Arial, sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.45 !important;
+    direction: rtl !important;
+    overflow: visible !important;
+  }
+
+  #shift-report * { color: #000 !important; }
+
   .no-print { display: none !important; }
 }
 
