@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { getClientIpFromHeaders } from '../src/lib/rate-limit.ts'
+import { getClientIpFromHeaders } from '../src/lib/client-ip.ts'
 
 test('client cannot spoof rate-limit identity with forwarded headers by default', () => {
   const previous = process.env.TRUST_PROXY_HEADERS
