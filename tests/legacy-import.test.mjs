@@ -5,7 +5,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { mkdtempSync, rmSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { importLegacyDatabase, resolveReturnItemLinks } from '../scripts/import-legacy-sqlite.mjs'
+import { importLegacyDatabase, resolveReturnItemLinks, reconcileStockLedger } from '../scripts/import-legacy-sqlite.mjs'
 
 function makeLegacyFixture(path) {
   const db = new DatabaseSync(path)
@@ -86,6 +86,13 @@ test('legacy import repairs unique orphan return references, preserves raw table
   assert.equal(result.repairedSaleReturnLinks[0].originalSaleItemId, 'missing-sale-item')
   assert.equal(result.repairedSaleReturnLinks[0].repairedSaleItemId, 'si1')
   assert.equal(result.archivedLegacyTableCounts.cash_ledger, 1)
+  assert.equal(result.stockLedgerReconciliation.adjustmentCount, 1)
+  assert.equal(result.stockLedgerReconciliation.netAdjustmentUnits, 1)
+  assert.equal(result.stockLedgerReconciliation.items[0].sku, 'SKU-1')
+  assert.equal(result.stockLedgerReconciliation.items[0].currentQuantity, 8)
+  assert.equal(result.stockLedgerReconciliation.items[0].calculatedQuantity, 7)
+  assert.equal(result.stockLedgerReconciliation.items[0].adjustmentNeeded, 1)
+  assert.equal(result.stockLedgerReconciliation.sourceOnHandQuantitiesPreserved, true)
 
   assert.equal(existsSync(targetPath), true)
   const target = new DatabaseSync(targetPath, { readOnly: true })
@@ -97,6 +104,13 @@ test('legacy import repairs unique orphan return references, preserves raw table
     assert.equal(target.prepare('SELECT COUNT(*) AS n FROM "Setting" WHERE key = ?').get('autoSyncEnabled').n, 0)
     assert.equal(target.prepare('SELECT COUNT(*) AS n FROM "legacy_archive__sync_queue"').get().n, 0)
     assert.equal(target.prepare('SELECT COUNT(*) AS n FROM "legacy_archive__cash_ledger"').get().n, 1)
+    const reconciliation = target.prepare('SELECT quantityChange, reason, notes FROM "StockAdjustment" WHERE reason = ?').get('تسوية رصيد المخزون عند استيراد البيانات')
+    assert.equal(reconciliation.quantityChange, 1)
+    assert.match(reconciliation.notes, /الرصيد الفعلي المحفوظ قبل الاستيراد: 8/)
+    assert.match(reconciliation.notes, /الرصيد المحسوب من سجلات التشغيل المستوردة: 7/)
+    assert.equal(target.prepare('SELECT quantity FROM "ProductVariant" WHERE id = ?').get('v1').quantity, 8)
+    assert.equal(target.prepare('SELECT COUNT(*) AS n FROM "legacy_archive__stock_movements"').get().n, 1)
+    assert.equal(target.prepare('SELECT quantity FROM "legacy_archive__stock_movements" WHERE id = ?').get('sm1').quantity, 8)
     assert.equal(target.prepare('PRAGMA foreign_key_check').all().length, 0)
   } finally {
     target.close()
