@@ -489,21 +489,15 @@ export async function verifyManagerPin(
   }
 
   try {
-    const row =
-      await db.setting.findUnique({
-        where: {
-          key: 'managerPin',
-        },
-      })
+    const row = await db.setting.findUnique({ where: { key: 'managerPin' } })
+    if (row?.value && verifyPassword(pin, row.value)) return true
 
-    if (!row?.value) {
-      return false
-    }
-
-    return verifyPassword(
-      pin,
-      row.value
-    )
+    // Legacy local accounts store PIN hashes per user rather than in a global setting.
+    const privilegedUsers = await db.user.findMany({
+      where: { active: true, role: { in: ['admin', 'manager'] }, pinHash: { not: null } },
+      select: { pinHash: true },
+    })
+    return privilegedUsers.some((user) => Boolean(user.pinHash && verifyPin(pin, user.pinHash)))
   } catch {
     return false
   }
