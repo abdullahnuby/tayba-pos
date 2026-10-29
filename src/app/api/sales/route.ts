@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { getCurrentUser } from '@/lib/auth'
 import { auditLog } from '@/lib/audit'
 import { checkSaleItemPrice } from '@/lib/pricing'
+import { applyRateLimit, RATE_LIMITS } from '@/lib/rate-limit'
 
 const item = z.object({ variantId: z.string().min(1), quantity: z.number().int().positive(), unitPrice: z.number().min(0.01) })
 function sanitizeCashierSale(sale: any) {
@@ -71,6 +72,8 @@ export async function POST(req: NextRequest) {
         const check = await checkSaleItemPrice(it.variantId, it.unitPrice, user.role)
         if (!check.ok) {
           if (check.needsManagerApproval && data.managerPin) {
+            const pinLimited = applyRateLimit(req, 'manager-approval-pin', RATE_LIMITS.login.max, RATE_LIMITS.login.window)
+            if (pinLimited) return pinLimited
             const { verifyManagerPin } = await import('@/lib/auth')
             if (!(await verifyManagerPin(data.managerPin))) return NextResponse.json({ error: 'PIN المدير غير صحيح' }, { status: 403 })
             managerOverride = true
