@@ -2,6 +2,7 @@
 
 import { useQuery } from '@tanstack/react-query'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -38,9 +39,9 @@ const ENTITY_LABELS: Record<string, string> = {
 }
 
 export function AuditLogSection() {
-  const { data, isLoading } = useQuery<{ items: any[] }>({
+  const { data, isLoading, isError, refetch } = useQuery<{ items: any[] }>({
     queryKey: ['audit-logs'],
-    queryFn: async () => (await fetch('/api/audit-logs?limit=200')).json(),
+    queryFn: async () => { const response = await fetch('/api/audit-logs?limit=200'); if (!response.ok) throw new Error('تعذر تحميل سجل العمليات'); return response.json() },
   })
   const logs = data?.items || []
 
@@ -60,6 +61,8 @@ export function AuditLogSection() {
             <div className="space-y-2">
               {Array.from({ length: 5 }).map((_, i) => <Skeleton key={i} className="h-12 w-full" />)}
             </div>
+          ) : isError ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center"><p className="text-sm text-destructive">تعذر تحميل سجل العمليات.</p><Button variant="outline" onClick={() => void refetch()}>إعادة المحاولة</Button></div>
           ) : logs.length === 0 ? (
             <EmptyState title="لا توجد عمليات مسجلة" icon={FileClock} />
           ) : (

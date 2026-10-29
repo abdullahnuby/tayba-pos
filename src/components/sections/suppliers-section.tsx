@@ -51,9 +51,9 @@ export function SuppliersSection() {
   const [statementEntity, setStatementEntity] = useState<Supplier | null>(null)
   const [search, setSearch] = useState('')
 
-  const { data: suppliers = [], isLoading } = useQuery<Supplier[]>({
+  const { data: suppliers = [], isLoading, isError, refetch } = useQuery<Supplier[]>({
     queryKey: ['suppliers'],
-    queryFn: async () => (await fetch('/api/suppliers')).json(),
+    queryFn: async () => { const response = await fetch('/api/suppliers'); if (!response.ok) throw new Error('تعذر تحميل الموردين'); return response.json() },
   })
 
   const filtered = suppliers.filter((s) =>
@@ -168,6 +168,8 @@ export function SuppliersSection() {
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-44 w-full" />)}
         </div>
+      ) : isError ? (
+        <Card><CardContent className="flex flex-col items-center gap-3 py-10 text-center"><p className="text-sm text-destructive">تعذر تحميل قائمة الموردين.</p><Button variant="outline" onClick={() => void refetch()}>إعادة المحاولة</Button></CardContent></Card>
       ) : filtered.length === 0 ? (
         <EmptyState title="لا توجد موردين" description="أضف أول مورد" icon={Users} />
       ) : (

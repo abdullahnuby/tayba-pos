@@ -33,9 +33,9 @@ interface StoreSettings {
 
 export function StoreSettingsSection() {
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery<StoreSettings>({
+  const { data, isLoading, isError, refetch } = useQuery<StoreSettings>({
     queryKey: ['store-settings'],
-    queryFn: async () => (await fetch('/api/store-settings')).json(),
+    queryFn: async () => { const response = await fetch('/api/store-settings'); if (!response.ok) throw new Error('تعذر تحميل إعدادات المحل'); return response.json() },
   })
 
   const [form, setForm] = useState<Partial<StoreSettings>>({})
@@ -107,8 +107,14 @@ export function StoreSettingsSection() {
     setForm({ ...form, [key]: String(value) })
   }
 
-  if (isLoading || !form) {
-    return <div className="text-muted-foreground">جارٍ التحميل...</div>
+  if (isLoading && !data) {
+    return <div className="text-muted-foreground">جارٍ تحميل إعدادات المحل...</div>
+  }
+  if (isError && !data) {
+    return <Card><CardContent className="flex flex-col items-center gap-3 p-8 text-center"><p className="text-sm text-destructive">تعذر تحميل إعدادات المحل.</p><Button variant="outline" onClick={() => void refetch()}>إعادة المحاولة</Button></CardContent></Card>
+  }
+  if (!form) {
+    return <div className="text-muted-foreground">جارٍ تحميل إعدادات المحل...</div>
   }
 
   return (

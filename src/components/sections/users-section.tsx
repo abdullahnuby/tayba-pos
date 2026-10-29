@@ -42,9 +42,9 @@ const ROLE_LABEL: Record<string, string> = {
 
 export function UsersSection() {
   const qc = useQueryClient()
-  const { data, isLoading } = useQuery<AppUser[]>({
+  const { data, isLoading, isError, refetch } = useQuery<AppUser[]>({
     queryKey: ['users'],
-    queryFn: async () => (await fetch('/api/users')).json(),
+    queryFn: async () => { const response = await fetch('/api/users'); if (!response.ok) throw new Error('تعذر تحميل المستخدمين'); return response.json() },
   })
 
   const [addOpen, setAddOpen] = useState(false)
@@ -235,11 +235,15 @@ export function UsersSection() {
       <Card>
         <CardHeader>
           <CardTitle className="text-base">كل المستخدمين</CardTitle>
-          <CardDescription>البيانات متخزنة على Google Sheet</CardDescription>
+          <CardDescription>حسابات المستخدمين محفوظة في قاعدة البيانات المحلية</CardDescription>
         </CardHeader>
         <CardContent>
           {isLoading ? (
             <p className="text-sm text-muted-foreground py-6 text-center">جاري التحميل...</p>
+          ) : isError ? (
+            <div className="flex flex-col items-center gap-3 py-8 text-center"><p className="text-sm text-destructive">تعذر تحميل المستخدمين.</p><Button variant="outline" onClick={() => void refetch()}>إعادة المحاولة</Button></div>
+          ) : data?.length === 0 ? (
+            <p className="py-8 text-center text-sm text-muted-foreground">لا يوجد مستخدمون مسجلون حتى الآن.</p>
           ) : (
             <Table>
               <TableHeader>
