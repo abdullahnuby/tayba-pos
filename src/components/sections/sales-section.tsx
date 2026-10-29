@@ -50,7 +50,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
   const [viewing, setViewing] = useState<Sale | null>(null)
   const [printing, setPrinting] = useState<Sale | null>(null)
 
-  const { data: shiftData, isLoading: shiftLoading } = useQuery<{ items: Array<{ id: string; status: string; openingFloat: number }> }>({
+  const { data: shiftData, isLoading: shiftLoading, isError: shiftError, refetch: refetchShift } = useQuery<{ items: Array<{ id: string; status: string; openingFloat: number }> }>({
     queryKey: ['register-sessions'],
     queryFn: async () => { const r = await fetch('/api/register-sessions'); if (!r.ok) throw new Error('register'); return r.json() },
     refetchInterval: 30000,
@@ -200,6 +200,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
   }
 
   if (user.role === 'cashier' && shiftLoading) return <div className="p-6"><Skeleton className="h-40 w-full rounded-3xl" /></div>
+  if (user.role === 'cashier' && shiftError) return <Card className="mx-auto mt-8 max-w-xl p-8 text-center"><Banknote className="mx-auto size-12 text-destructive" /><h2 className="mt-4 text-xl font-black">تعذر التحقق من حالة الوردية</h2><p className="mt-2 text-sm text-muted-foreground">لم يتم تغيير أي بيانات. أعد المحاولة قبل بدء البيع.</p><Button variant="outline" className="mt-5 h-12" onClick={() => void refetchShift()}>إعادة المحاولة</Button><Button className="mt-2 h-12 w-full" onClick={() => setSection('register')}>فتح شاشة الوردية</Button></Card>
   if (user.role === 'cashier' && !openShift) return <Card className="mx-auto mt-8 max-w-xl p-8 text-center"><Banknote className="mx-auto size-12 text-primary" /><h2 className="mt-4 text-2xl font-black">الوردية غير مفتوحة</h2><p className="mt-2 text-muted-foreground">لا يمكن للكاشير إصدار فواتير قبل فتح الوردية.</p><Button className="mt-5 h-12" onClick={() => setSection('register')}>فتح الوردية</Button></Card>
 
   return <div className="flex h-[100dvh] flex-col overflow-hidden bg-muted/10 lg:h-auto lg:min-h-[calc(100vh-8rem)] lg:rounded-3xl lg:border">
@@ -218,6 +219,8 @@ export function SalesSection({ user }: { user: SessionUser }) {
       </div>
       {historical && <div className="mt-2.5 flex flex-wrap items-end gap-3 rounded-2xl border bg-muted/30 p-3"><div><Label className="text-xs">تاريخ الفاتورة الورقية</Label><Input type="date" value={saleDate} max={new Date().toISOString().slice(0, 10)} onChange={e => setSaleDate(e.target.value)} className="mt-1 h-11" /></div><p className="text-xs text-muted-foreground">لإدخال فواتير الورق بتاريخها الحقيقي.</p></div>}
     </div>
+
+    {pricingSettingsQuery.isError && <div className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-destructive/30 bg-destructive/5 px-4 py-2 text-sm"><span className="text-destructive">تعذر تحميل إعدادات الضريبة؛ إنهاء البيع متوقف حتى تصبح الإعدادات متاحة.</span><Button type="button" size="sm" variant="outline" onClick={() => void pricingSettingsQuery.refetch()}>إعادة المحاولة</Button></div>}
 
     {/* Search */}
     <div className="shrink-0 border-b bg-background px-3 py-2.5 sm:px-4">
@@ -239,6 +242,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden lg:grid lg:grid-cols-[1fr_400px]">
       <div className="min-h-0 flex-1 overflow-y-auto p-3 sm:p-4">
         {productsQuery.isLoading ? <div className="grid grid-cols-3 gap-2">{Array.from({ length: 9 }).map((_, i) => <Skeleton key={i} className="h-[6.5rem] rounded-2xl" />)}</div> :
+          productsQuery.isError ? <div className="flex flex-col items-center gap-3 py-12 text-center"><p className="text-sm text-destructive">تعذر تحميل الأصناف؛ لم يتم إضافة أي شيء للسلة.</p><Button variant="outline" onClick={() => void productsQuery.refetch()}>إعادة المحاولة</Button></div> :
           visible.length === 0 ? <div className="py-16 text-center text-muted-foreground">لا توجد أصناف مطابقة</div> :
           <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
             {visible.map(p => {
@@ -269,7 +273,7 @@ export function SalesSection({ user }: { user: SessionUser }) {
         {customerPickerOpen && <div className="flex shrink-0 gap-2 overflow-x-auto border-b p-2 touch-pan-x">
           <button type="button" onClick={() => { setCustomerId(''); setCustomerPickerOpen(false) }} className={`min-w-max rounded-xl border px-3 py-2 text-xs font-bold ${!customerId ? 'border-primary bg-primary/10' : 'bg-card'}`}>عميل نقدي</button>
           {customers.map(c => <button key={c.id} type="button" onClick={() => { setCustomerId(c.id); setCustomerPickerOpen(false) }} className={`min-w-max rounded-xl border px-3 py-2 text-xs font-bold ${customerId === c.id ? 'border-primary bg-primary/10' : 'bg-card'}`}>{c.name}</button>)}
-          {!customers.length && <span className="py-2 text-xs text-muted-foreground">لا يوجد عملاء بعد</span>}
+          {customersQuery.isError ? <span className="flex items-center gap-2 py-2 text-xs text-destructive">تعذر تحميل العملاء <Button size="sm" variant="outline" onClick={() => void customersQuery.refetch()}>إعادة المحاولة</Button></span> : !customers.length && <span className="py-2 text-xs text-muted-foreground">لا يوجد عملاء بعد</span>}
         </div>}
 
         <div className="min-h-0 flex-1 overflow-y-auto p-2.5">
