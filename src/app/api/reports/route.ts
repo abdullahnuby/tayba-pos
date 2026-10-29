@@ -43,7 +43,6 @@ export async function GET(req: NextRequest) {
     db.saleReturn.findMany({
       where: { date: { gte: start, lte: end }, status: 'completed' },
       include: {
-        sale: { select: { paymentMethod: true } },
         sale: { select: { subtotal: true, total: true, taxAmount: true, paymentMethod: true } },
         items: {
           include: {
