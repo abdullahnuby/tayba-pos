@@ -1,7 +1,7 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createHmac } from 'node:crypto'
-import { createSessionToken, verifySessionToken, type SessionUser } from '../src/lib/auth.ts'
+import { createSessionToken, verifySessionToken, type SessionUser } from '../src/lib/session-token.ts'
 
 test('signed sessions carry the per-user epoch and reject tampering', () => {
   const previous = process.env.AUTH_SECRET
