@@ -203,7 +203,27 @@
     display: none !important;
   }
 
-  #printable-invoice, #printable-invoice * {
+  [role="dialog"]:has(#shift-report) {
+    position: static !important;
+    inset: auto !important;
+    transform: none !important;
+    width: auto !important;
+    max-width: none !important;
+    max-height: none !important;
+    height: auto !important;
+    margin: 0 !important;
+    padding: 0 !important;
+    border: 0 !important;
+    background: transparent !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+  }
+
+  [role="dialog"]:has(#shift-report) > :not(#shift-report) {
+    display: none !important;
+  }
+
+  #printable-invoice, #printable-invoice *, #shift-report, #shift-report * {
     visibility: visible !important;
   }
 
@@ -230,6 +250,30 @@
   }
 
   #printable-invoice * { color: #000 !important; }
+
+  #shift-report {
+    position: fixed !important;
+    inset: 0 auto auto 0 !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    width: 100% !important;
+    max-width: 180mm !important;
+    min-width: 0 !important;
+    margin: 0 auto !important;
+    padding: 10mm !important;
+    border: 0 !important;
+    border-radius: 0 !important;
+    background: #fff !important;
+    color: #000 !important;
+    box-shadow: none !important;
+    font-family: 'Cairo', Arial, sans-serif !important;
+    font-size: 10pt !important;
+    line-height: 1.45 !important;
+    direction: rtl !important;
+    overflow: visible !important;
+  }
+
+  #shift-report * { color: #000 !important; }
 
   .no-print { display: none !important; }
 }
