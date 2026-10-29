@@ -5,6 +5,7 @@ import {
   hashPassword,
   validatePasswordPolicy,
   flagMustChangePassword,
+  rotateSessionEpoch,
   hashPin,
   validatePinPolicy,
 } from '@/lib/auth'
@@ -93,6 +94,9 @@ export async function PATCH(
 
     if (passwordReset) {
       await flagMustChangePassword(updated.id)
+    }
+    if (passwordReset || data.active !== undefined || (typeof data.role === 'string' && data.role !== target.role)) {
+      await rotateSessionEpoch(updated.id)
     }
 
     await auditLog({
